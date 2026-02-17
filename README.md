@@ -42,8 +42,11 @@ Real-time meeting transcription system for W3C working groups. Captures audio fr
 transcriber-bot: Transcription bot ready. Type !help for commands.
 transcriber-bot: Otto Mora: Rock music is pretty cool right man?
 transcriber-bot: Paul McCartney: You're asking me dude?
-transcriber-bot: Otto Mora: Yeah. I assumed you were inspired in a few folks before you became a rockstar yourself right?
-transcriber-bot: Paul McCartney: I can tell you my inspirations, but I would like be this off-the-record please. Sound good?
+transcriber-bot: Yeah. I assumed you were inspired in a few folks before
+transcriber-bot: you became a rockstar yourself right?
+transcriber-bot: Paul McCartney: I can tell you my inspirations,
+transcriber-bot: Paul McCartney: but I would like be this off-the-record,.
+transcriber-bot: Paul McCartney: please. Sound good?
 transcriber-bot: Otto Mora: ok, let me pause the transcription
 ottomorac: !pause
 transcriber-bot: Transcription PAUSED (Paused by ottomorac)
