@@ -1,0 +1,28 @@
+{
+  "name": "w3c-meeting-transcriber",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Real-time meeting transcription system for W3C working groups",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev:gateway": "npm run dev -w @transcriber/gateway",
+    "dev:irc": "npm run dev -w @transcriber/irc-bot",
+    "dev": "concurrently \"npm:dev:*\"",
+    "clean": "rm -rf packages/*/dist node_modules packages/*/node_modules",
+    "predev": "npm install"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "concurrently": "^8.2.2",
+    "dotenv-cli": "^7.4.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
