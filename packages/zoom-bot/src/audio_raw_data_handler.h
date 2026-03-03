@@ -26,7 +26,7 @@ private:
 
     // Compute RMS energy of audio buffer to detect speech
     static double computeRMS(const char* buffer, unsigned int bufferLen);
-    static constexpr double SPEECH_THRESHOLD = 500.0; // RMS threshold for speech detection
+    static constexpr double SPEECH_THRESHOLD = 200.0; // RMS threshold for speech detection
 
     uint64_t nowMs() const;
     void sendActiveSpeakerUpdate();

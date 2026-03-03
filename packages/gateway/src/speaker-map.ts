@@ -30,6 +30,8 @@ export class SpeakerMap {
   private assignedNames = new Set<string>();
   // Most recent active speakers from zoom-bot
   private activeSpeakers: ActiveSpeaker[] = [];
+  // Last speaker seen as active, used as a fallback for phantom indices
+  private lastActiveSpeaker: ActiveSpeaker | null = null;
 
   /**
    * Update the list of currently active speakers (from zoom-bot metadata).
@@ -41,6 +43,9 @@ export class SpeakerMap {
       name: s.name,
       timestamp: now,
     }));
+    if (this.activeSpeakers.length > 0) {
+      this.lastActiveSpeaker = this.activeSpeakers[0];
+    }
   }
 
   /**
@@ -48,7 +53,7 @@ export class SpeakerMap {
    */
   addParticipant(userId: number, name: string): void {
     // If this name was previously mapped to an index, update it
-    for (const [idx, entry] of this.indexToName) {
+    for (const entry of this.indexToName.values()) {
       if (entry.zoomUserId === userId) {
         entry.name = name;
         break;
@@ -59,7 +64,7 @@ export class SpeakerMap {
   /**
    * Handle a participant leaving - keep the mapping (Deepgram indices are stable).
    */
-  removeParticipant(userId: number): void {
+  removeParticipant(_userId: number): void {
     // Keep mapping intact - Deepgram will keep using the same index
   }
 
@@ -81,22 +86,37 @@ export class SpeakerMap {
 
     // Try to assign: pick the first active speaker not already mapped
     const now = Date.now();
+    let firstActiveMapped: ActiveSpeaker | null = null;
+
     for (const speaker of this.activeSpeakers) {
       // Only consider recent activity (within last 3 seconds)
       if (now - speaker.timestamp > 3000) continue;
-      if (this.assignedNames.has(speaker.name)) continue;
 
-      // Map this Deepgram index to this Zoom participant
-      this.indexToName.set(index, {
-        name: speaker.name,
-        zoomUserId: speaker.userId,
-      });
-      this.assignedNames.add(speaker.name);
-      console.log(`[SpeakerMap] Mapped Speaker ${index} → ${speaker.name}`);
-      return speaker.name;
+      if (!this.assignedNames.has(speaker.name)) {
+        // New participant seen for the first time - create a fresh mapping
+        this.indexToName.set(index, { name: speaker.name, zoomUserId: speaker.userId });
+        this.assignedNames.add(speaker.name);
+        console.log(`[SpeakerMap] Mapped Speaker ${index} → ${speaker.name}`);
+        return speaker.name;
+      }
+
+      // Remember the first already-mapped active speaker as a fallback
+      if (!firstActiveMapped) {
+        firstActiveMapped = speaker;
+      }
     }
 
-    // No mapping found - return original label
+    // Deepgram created a phantom index for someone already mapped under a
+    // different index (common when diarization re-clusters mid-session).
+    // Attribute it to whoever the zoom-bot says is currently speaking.
+    const fallback = firstActiveMapped ?? this.lastActiveSpeaker;
+    if (fallback) {
+      this.indexToName.set(index, { name: fallback.name, zoomUserId: fallback.userId });
+      console.log(`[SpeakerMap] Mapped phantom Speaker ${index} → ${fallback.name} (re-cluster)`);
+      return fallback.name;
+    }
+
+    // No active speaker information available at all - return original label
     return deepgramSpeaker;
   }
 
@@ -107,5 +127,6 @@ export class SpeakerMap {
     this.indexToName.clear();
     this.assignedNames.clear();
     this.activeSpeakers = [];
+    this.lastActiveSpeaker = null;
   }
 }

@@ -13,4 +13,5 @@ zoom-sdk/
 packages/zoom-bot/build/
 packages/zoom-bot/third_party/nlohmann/json.hpp
 testing/
+backups/
 *.code-workspace

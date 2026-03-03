@@ -93,6 +93,10 @@ export class GatewayServer {
       await this.deepgram.disconnect();
     }
 
+    // Each new Deepgram connection starts fresh speaker diarization, so the
+    // old Speaker 0 / Speaker 1 indices no longer correspond to the same people.
+    this.speakerMap.reset();
+
     // Create new Deepgram client
     this.deepgram = new DeepgramStreamClient(this.config.deepgram);
 

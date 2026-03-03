@@ -12,19 +12,24 @@ export interface CommandContext {
 }
 
 export class CommandHandler {
-  private readonly commandPrefix = '!';
+  private readonly commandPrefix: string;
   private scribeActive = false;
 
-  constructor(private redis: Redis) {}
+  constructor(private redis: Redis, botNick: string) {
+    // Accept "botNick, command args" — case-insensitive on the nick
+    this.commandPrefix = `${botNick},`;
+  }
 
   async handleMessage(ctx: CommandContext): Promise<string | null> {
     const { message, nick } = ctx;
 
-    if (!message.startsWith(this.commandPrefix)) {
+    // Match "<botnick>, <command> [args]" case-insensitively
+    if (!message.toLowerCase().startsWith(this.commandPrefix.toLowerCase())) {
       return null;
     }
 
-    const parts = message.slice(1).split(/\s+/);
+    const body = message.slice(this.commandPrefix.length).trim();
+    const parts = body.split(/\s+/);
     const command = parts[0].toLowerCase();
     const args = parts.slice(1);
 
@@ -91,7 +96,7 @@ export class CommandHandler {
 
   private async handleChair(nick: string, args: string[]): Promise<string> {
     if (args.length === 0) {
-      return 'Usage: !chair <nick> - Add a meeting chair';
+      return `Usage: ${this.commandPrefix} chair <nick> - Add a meeting chair`;
     }
 
     const chairNick = args[0];
@@ -112,14 +117,15 @@ export class CommandHandler {
   }
 
   private handleHelp(): string {
+    const p = this.commandPrefix;
     return [
       'Available commands:',
-      '  !pause  - Pause transcription (chairs only)',
-      '  !resume - Resume transcription (chairs only)',
-      '  !status - Show transcription status',
-      '  !chair <nick> - Add a meeting chair',
-      '  !scribe - Toggle scribe mode (scribe+/scribe-)',
-      '  !help   - Show this help message'
+      `  ${p} pause          - Pause transcription (chairs only)`,
+      `  ${p} resume         - Resume transcription (chairs only)`,
+      `  ${p} status         - Show transcription status`,
+      `  ${p} chair <nick>   - Add a meeting chair`,
+      `  ${p} scribe         - Toggle scribe mode (scribe+/scribe-)`,
+      `  ${p} help           - Show this help message`
     ].join('\n');
   }
 }

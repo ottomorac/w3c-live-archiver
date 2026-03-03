@@ -37,14 +37,14 @@ export class TranscriptionBot {
     private redisSub: Redis
   ) {
     this.ircClient = new IRCClient(config.irc);
-    this.commandHandler = new CommandHandler(redis);
+    this.commandHandler = new CommandHandler(redis, config.irc.nick);
     this.setupIRCHandlers();
     this.setupRedisSubscriptions();
   }
 
   private setupIRCHandlers(): void {
     this.ircClient.on('joined', (channel: string) => {
-      this.sendMessage('Transcription bot ready. Type !help for commands.');
+      this.sendMessage(`Transcription bot ready. Type "${this.config.irc.nick}, help" for commands.`);
     });
 
     this.ircClient.on('message', async (msg: IRCMessage) => {
@@ -168,7 +168,7 @@ export class TranscriptionBot {
       clearTimeout(this.buffer.timer);
     }
 
-    this.sendMessage(`${this.buffer.speaker}: ${this.buffer.text}`);
+    this.sendMessage(`${this.buffer.speaker}: ${this.buffer.text}...`);
     this.buffer = null;
   }
 
