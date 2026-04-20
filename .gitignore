@@ -15,3 +15,6 @@ packages/zoom-bot/third_party/nlohmann/json.hpp
 testing/
 backups/
 *.code-workspace
+packages/rtms-gateway/logs/
+.claude/
+

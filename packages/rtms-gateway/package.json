@@ -1,5 +1,5 @@
 {
-  "name": "@transcriber/gateway",
+  "name": "@transcriber/rtms-gateway",
   "version": "0.1.0",
   "license": "MIT",
   "main": "./dist/index.js",
@@ -9,15 +9,15 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@deepgram/sdk": "^3.4.0",
     "@transcriber/shared": "*",
+    "@zoom/rtms": "^1.0.3",
     "dotenv": "^16.4.1",
-    "ioredis": "^5.3.2",
-    "ws": "^8.16.0"
+    "express": "^4.21.2",
+    "ioredis": "^5.3.2"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^20.11.0",
-    "@types/ws": "^8.5.10",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

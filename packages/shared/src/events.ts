@@ -13,8 +13,6 @@ export enum CommandType {
   PAUSE = 'pause',
   RESUME = 'resume',
   STATUS = 'status',
-  SET_CHAIR = 'set_chair',
-  REMOVE_CHAIR = 'remove_chair'
 }
 
 export interface Command {

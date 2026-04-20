@@ -86,6 +86,15 @@ export class IRCClient extends EventEmitter {
     this.client.say(target, message);
   }
 
+  action(target: string, message: string): void {
+    if (!this.connected) {
+      console.warn('[IRC] Cannot send action: not connected');
+      return;
+    }
+
+    this.client.action(target, message);
+  }
+
   disconnect(): void {
     if (this.connected) {
       this.client.quit('Transcription bot shutting down');

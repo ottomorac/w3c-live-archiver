@@ -3,7 +3,7 @@
  */
 
 import type Redis from 'ioredis';
-import { CommandType, REDIS_CHANNELS, type Command } from '@transcriber/shared';
+import { CommandType, REDIS_CHANNELS } from '@transcriber/shared';
 
 export interface CommandContext {
   nick: string;
@@ -13,8 +13,6 @@ export interface CommandContext {
 
 export class CommandHandler {
   private readonly commandPrefix: string;
-  private scribeActive = false;
-
   constructor(private redis: Redis, botNick: string) {
     // Accept "botNick, command args" — case-insensitive on the nick
     this.commandPrefix = `${botNick},`;
@@ -42,12 +40,6 @@ export class CommandHandler {
 
       case 'status':
         return await this.handleStatus(nick);
-
-      case 'chair':
-        return await this.handleChair(nick, args);
-
-      case 'scribe':
-        return this.handleScribe();
 
       case 'help':
         return this.handleHelp();
@@ -94,38 +86,14 @@ export class CommandHandler {
     return '🔍 Checking transcription status...';
   }
 
-  private async handleChair(nick: string, args: string[]): Promise<string> {
-    if (args.length === 0) {
-      return `Usage: ${this.commandPrefix} chair <nick> - Add a meeting chair`;
-    }
-
-    const chairNick = args[0];
-    const cmd: Command = {
-      type: CommandType.SET_CHAIR,
-      triggeredBy: nick,
-      timestamp: Date.now(),
-      args: { nick: chairNick }
-    };
-
-    await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
-    return `✓ Added ${chairNick} as meeting chair`;
-  }
-
-  private handleScribe(): string {
-    this.scribeActive = !this.scribeActive;
-    return this.scribeActive ? 'scribe+' : 'scribe-';
-  }
-
   private handleHelp(): string {
     const p = this.commandPrefix;
     return [
       'Available commands:',
-      `  ${p} pause          - Pause transcription (chairs only)`,
-      `  ${p} resume         - Resume transcription (chairs only)`,
-      `  ${p} status         - Show transcription status`,
-      `  ${p} chair <nick>   - Add a meeting chair`,
-      `  ${p} scribe         - Toggle scribe mode (scribe+/scribe-)`,
-      `  ${p} help           - Show this help message`
+      `  ${p} pause   - Pause transcription`,
+      `  ${p} resume  - Resume transcription`,
+      `  ${p} status  - Show transcription status`,
+      `  ${p} help    - Show this help message`
     ].join('\n');
   }
 }

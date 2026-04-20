@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "dev:gateway": "npm run dev -w @transcriber/gateway",
+    "dev:rtms-gateway": "npm run dev -w @transcriber/rtms-gateway",
     "dev:irc": "npm run dev -w @transcriber/irc-bot",
     "dev": "concurrently \"npm:dev:*\"",
     "clean": "rm -rf packages/*/dist node_modules packages/*/node_modules",

@@ -35,35 +35,11 @@ export interface ErrorData {
   details?: unknown;
 }
 
-export interface MeetingChair {
-  ircNick: string;
-  addedAt: number;
-  addedBy?: string;
-}
-
 export interface MeetingSession {
   id: string;
   startedAt: number;
   ircChannel: string;
-  chairs: MeetingChair[];
   state: TranscriptionState;
-  deepgramSessionId?: string;
-}
-
-export interface AudioChunk {
-  data: Buffer;
-  timestamp: number;
-  sampleRate: number;
-  channels: number;
-}
-
-export interface DeepgramConfig {
-  apiKey: string;
-  model?: string;
-  language?: string;
-  diarize?: boolean;
-  punctuate?: boolean;
-  interim_results?: boolean;
 }
 
 export interface IRCConfig {

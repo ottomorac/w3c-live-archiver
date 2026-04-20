@@ -30,6 +30,7 @@ export class TranscriptionBot {
   private commandHandler: CommandHandler;
   private currentState: TranscriptionState = TranscriptionState.IDLE;
   private buffer: TranscriptBuffer | null = null;
+  private lastPostedSpeaker: string | null = null;
 
   constructor(
     private config: BotConfig,
@@ -44,7 +45,7 @@ export class TranscriptionBot {
 
   private setupIRCHandlers(): void {
     this.ircClient.on('joined', (channel: string) => {
-      this.sendMessage(`Transcription bot ready. Type "${this.config.irc.nick}, help" for commands.`);
+      this.sendAction(`Transcription bot ready. Type "${this.config.irc.nick}, help" for commands.`);
     });
 
     this.ircClient.on('message', async (msg: IRCMessage) => {
@@ -55,7 +56,7 @@ export class TranscriptionBot {
       });
 
       if (response) {
-        this.sendMessage(response);
+        this.sendAction(response);
       }
     });
 
@@ -112,17 +113,21 @@ export class TranscriptionBot {
 
     // Flush any pending transcript before posting state change
     this.flushBuffer();
+    this.lastPostedSpeaker = null;
 
     let message = '';
     switch (stateChange.newState) {
       case TranscriptionState.ACTIVE:
         message = '▶️  Transcription ACTIVE';
+        this.sendMessage('scribe+');
         break;
       case TranscriptionState.PAUSED:
         message = '⏸️  Transcription PAUSED';
+        this.sendMessage('scribe-');
         break;
       case TranscriptionState.IDLE:
         message = '⏹️  Transcription STOPPED';
+        this.sendMessage('scribe-');
         break;
     }
 
@@ -130,7 +135,7 @@ export class TranscriptionBot {
       message += ` (${stateChange.reason})`;
     }
 
-    this.sendMessage(message);
+    this.sendAction(message);
   }
 
   private postTranscript(segment: TranscriptSegment): void {
@@ -168,7 +173,11 @@ export class TranscriptionBot {
       clearTimeout(this.buffer.timer);
     }
 
-    this.sendMessage(`${this.buffer.speaker}: ${this.buffer.text}...`);
+    const text = this.buffer.text.replace(/[\u2026.]+$/, '');
+    const isContinuation = this.buffer.speaker === this.lastPostedSpeaker;
+    const speaker = this.buffer.speaker.replace(/ /g, '\u00A0');
+    this.sendMessage(isContinuation ? `... ${text}` : `${speaker}: ${text}...`);
+    this.lastPostedSpeaker = this.buffer.speaker;
     this.buffer = null;
   }
 
@@ -185,16 +194,27 @@ export class TranscriptionBot {
   }
 
   private sendMessage(message: string): void {
-    // Don't send if not connected yet
     if (!this.ircClient.isConnected()) {
       return;
     }
 
-    // Split long messages
     const lines = message.split('\n');
     for (const line of lines) {
       if (line.trim()) {
         this.ircClient.say(this.config.irc.channel, line);
+      }
+    }
+  }
+
+  private sendAction(message: string): void {
+    if (!this.ircClient.isConnected()) {
+      return;
+    }
+
+    const lines = message.split('\n');
+    for (const line of lines) {
+      if (line.trim()) {
+        this.ircClient.action(this.config.irc.channel, line);
       }
     }
   }
