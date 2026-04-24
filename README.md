@@ -191,17 +191,16 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 
 | Command | Access | Description |
 |---------|--------|-------------|
-| `transcriber-bot, pause` | Chairs only | Pause transcription (off the record) |
-| `transcriber-bot, resume` | Chairs only | Resume transcription |
+| `transcriber-bot, pause` | Anyone | Pause transcription (off the record) |
+| `transcriber-bot, resume` | Anyone | Resume transcription |
 | `transcriber-bot, status` | Anyone | Show current transcription status |
-| `transcriber-bot, chair <nick>` | Anyone | Add an IRC user as a meeting chair |
 | `transcriber-bot, scribe` | Anyone | Toggle W3C scribe mode (`scribe+`/`scribe-`) |
 | `transcriber-bot, help` | Anyone | Show available commands |
 
-The first time you need to set a chair before pause/resume will work:
+By default the transcriber-bot joins an IRC channel in "paused mode". This means it needs to be told resume in order to start transcribing meeting notes:
+
 ```
-transcriber-bot, chair yournick
-transcriber-bot, pause
+transcriber-bot, resume
 ```
 
 ## Configuration Reference

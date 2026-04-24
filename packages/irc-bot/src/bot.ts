@@ -5,7 +5,9 @@
 import type Redis from 'ioredis';
 import {
   REDIS_CHANNELS,
+  CommandType,
   TranscriptionState,
+  type Command,
   type TranscriptSegment,
   type StateChangeData,
   type TranscriptionEvent
@@ -14,10 +16,9 @@ import { IRCClient, type IRCMessage } from './irc-client';
 import { CommandHandler } from './command-handler';
 import type { BotConfig } from './config';
 
-// Maximum characters per IRC line (leaving room for protocol overhead + speaker prefix)
 const MAX_LINE_LENGTH = 400;
-// Flush buffer after this many ms of no new transcript from same speaker
 const BUFFER_FLUSH_DELAY_MS = 3000;
+const SLEEP_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface TranscriptBuffer {
   speaker: string;
@@ -31,6 +32,8 @@ export class TranscriptionBot {
   private currentState: TranscriptionState = TranscriptionState.IDLE;
   private buffer: TranscriptBuffer | null = null;
   private lastPostedSpeaker: string | null = null;
+  private sleepTimer: NodeJS.Timeout | null = null;
+  private sleepTriggeredPause = false;
 
   constructor(
     private config: BotConfig,
@@ -99,6 +102,7 @@ export class TranscriptionBot {
       return;
     }
 
+    this.resetSleepTimer();
     const segment = event.data as TranscriptSegment;
     this.postTranscript(segment);
   }
@@ -120,12 +124,20 @@ export class TranscriptionBot {
       case TranscriptionState.ACTIVE:
         message = '▶️  Transcription ACTIVE';
         this.sendMessage('scribe+');
+        this.resetSleepTimer();
         break;
       case TranscriptionState.PAUSED:
-        message = '⏸️  Transcription PAUSED';
+        this.clearSleepTimer();
+        if (this.sleepTriggeredPause) {
+          this.sleepTriggeredPause = false;
+          message = 'Going into sleep mode, transcription paused';
+        } else {
+          message = '⏸️  Transcription PAUSED';
+        }
         this.sendMessage('scribe-');
         break;
       case TranscriptionState.IDLE:
+        this.clearSleepTimer();
         message = '⏹️  Transcription STOPPED';
         this.sendMessage('scribe-');
         break;
@@ -136,6 +148,30 @@ export class TranscriptionBot {
     }
 
     this.sendAction(message);
+  }
+
+  private resetSleepTimer(): void {
+    if (this.currentState !== TranscriptionState.ACTIVE) return;
+    this.clearSleepTimer();
+    this.sleepTimer = setTimeout(() => this.triggerSleepMode(), SLEEP_TIMEOUT_MS);
+  }
+
+  private clearSleepTimer(): void {
+    if (this.sleepTimer) {
+      clearTimeout(this.sleepTimer);
+      this.sleepTimer = null;
+    }
+  }
+
+  private async triggerSleepMode(): Promise<void> {
+    this.sleepTimer = null;
+    this.sleepTriggeredPause = true;
+    const cmd: Command = {
+      type: CommandType.PAUSE,
+      triggeredBy: 'sleep-mode',
+      timestamp: Date.now()
+    };
+    await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
   }
 
   private postTranscript(segment: TranscriptSegment): void {
