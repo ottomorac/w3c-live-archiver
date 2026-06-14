@@ -47,7 +47,6 @@ export class SessionManager {
 
   private handleCommand(command: Command): void {
     console.log('[SessionManager] Received command:', command.type, 'from', command.triggeredBy);
-
     const callback = this.commandCallbacks.get(command.type);
     if (callback) {
       callback(command);
@@ -58,11 +57,11 @@ export class SessionManager {
     this.commandCallbacks.set(type, callback);
   }
 
-  async createSession(ircChannel: string): Promise<MeetingSession> {
+  async createSession(): Promise<MeetingSession> {
     const session: MeetingSession = {
       id: `session-${Date.now()}`,
       startedAt: Date.now(),
-      ircChannel,
+      ircChannel: '',
       state: TranscriptionState.IDLE
     };
 
@@ -71,7 +70,7 @@ export class SessionManager {
     return session;
   }
 
-  async updateState(newState: TranscriptionState, reason?: string): Promise<void> {
+  async updateState(newState: TranscriptionState, reason?: string, ircChannel?: string): Promise<void> {
     if (!this.session) {
       throw new Error('No active session');
     }
@@ -79,13 +78,22 @@ export class SessionManager {
     const previousState = this.session.state;
     this.session.state = newState;
 
+    if (ircChannel) {
+      this.session.ircChannel = ircChannel;
+    }
+
     await this.saveSession();
 
     await this.redis.publish(
       REDIS_CHANNELS.STATE_CHANGES,
       JSON.stringify({
         type: 'state_change',
-        data: { previousState, newState, reason },
+        data: {
+          previousState,
+          newState,
+          reason,
+          ircChannel: this.session.ircChannel || undefined,
+        },
         timestamp: Date.now()
       })
     );

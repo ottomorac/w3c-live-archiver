@@ -3,7 +3,7 @@
  */
 
 import type Redis from 'ioredis';
-import { CommandType, REDIS_CHANNELS } from '@transcriber/shared';
+import { CommandType, REDIS_CHANNELS, type Command } from '@transcriber/shared';
 
 export interface CommandContext {
   nick: string;
@@ -14,14 +14,12 @@ export interface CommandContext {
 export class CommandHandler {
   private readonly commandPrefix: string;
   constructor(private redis: Redis, botNick: string) {
-    // Accept "botNick, command args" — case-insensitive on the nick
     this.commandPrefix = `${botNick},`;
   }
 
   async handleMessage(ctx: CommandContext): Promise<string | null> {
-    const { message, nick } = ctx;
+    const { message, nick, channel } = ctx;
 
-    // Match "<botnick>, <command> [args]" case-insensitively
     if (!message.toLowerCase().startsWith(this.commandPrefix.toLowerCase())) {
       return null;
     }
@@ -29,17 +27,19 @@ export class CommandHandler {
     const body = message.slice(this.commandPrefix.length).trim();
     const parts = body.split(/\s+/);
     const command = parts[0].toLowerCase();
-    const args = parts.slice(1);
 
     switch (command) {
+      case 'connect':
+        return await this.handleConnect(nick, channel);
+
       case 'pause':
-        return await this.handlePause(nick);
+        return await this.handlePause(nick, channel);
 
       case 'resume':
-        return await this.handleResume(nick);
+        return await this.handleResume(nick, channel);
 
       case 'status':
-        return await this.handleStatus(nick);
+        return await this.handleStatus(nick, channel);
 
       case 'help':
         return this.handleHelp();
@@ -49,40 +49,47 @@ export class CommandHandler {
     }
   }
 
-  private async handlePause(nick: string): Promise<string | null> {
+  private async handleConnect(nick: string, channel: string): Promise<string> {
+    const cmd: Command = {
+      type: CommandType.CONNECT,
+      triggeredBy: nick,
+      channel,
+      timestamp: Date.now()
+    };
+    await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
+    return 'Attempting to connect to the Zoom meeting — transcription will start automatically once connected.';
+  }
+
+  private async handlePause(nick: string, channel: string): Promise<string | null> {
     const cmd: Command = {
       type: CommandType.PAUSE,
       triggeredBy: nick,
+      channel,
       timestamp: Date.now()
     };
-
     await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
-    // Don't return a message - the state change event will announce the result
     return null;
   }
 
-  private async handleResume(nick: string): Promise<string | null> {
+  private async handleResume(nick: string, channel: string): Promise<string | null> {
     const cmd: Command = {
       type: CommandType.RESUME,
       triggeredBy: nick,
+      channel,
       timestamp: Date.now()
     };
-
     await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
-    // Don't return a message - the state change event will announce the result
     return null;
   }
 
-  private async handleStatus(nick: string): Promise<string> {
+  private async handleStatus(nick: string, channel: string): Promise<string> {
     const cmd: Command = {
       type: CommandType.STATUS,
       triggeredBy: nick,
+      channel,
       timestamp: Date.now()
     };
-
     await this.redis.publish(REDIS_CHANNELS.COMMANDS, JSON.stringify(cmd));
-
-    // Status will be returned via Redis pub/sub
     return '🔍 Checking transcription status...';
   }
 
@@ -90,10 +97,12 @@ export class CommandHandler {
     const p = this.commandPrefix;
     return [
       'Available commands:',
-      `  ${p} pause   - Pause transcription`,
-      `  ${p} resume  - Resume transcription`,
-      `  ${p} status  - Show transcription status`,
-      `  ${p} help    - Show this help message`
+      `  ${p} connect          - Connect to the Zoom meeting and start transcription`,
+      `  ${p} pause            - Pause transcription`,
+      `  ${p} resume           - Resume transcription after a pause`,
+      `  ${p} status           - Show transcription status`,
+      `  ${p} please excuse us - Leave this IRC channel`,
+      `  ${p} help             - Show this help message`
     ].join('\n');
   }
 }

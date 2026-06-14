@@ -23,28 +23,46 @@ export interface RTMSGatewayConfig {
     clientSecret: string;
     secretToken: string;
     oauthRedirectUri: string;
+    accountId?: string;
   };
   webhook: {
     port: number;
     path: string;
   };
   redis: RedisConfig;
-  irc: {
-    channel: string;
-  };
+  channelMeetingMap: Record<string, string>;
+}
+
+function parseChannelMeetingMap(raw: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const entry of raw.split(',')) {
+    const trimmed = entry.trim();
+    const colonIdx = trimmed.lastIndexOf(':');
+    if (colonIdx > 0) {
+      const channel = trimmed.slice(0, colonIdx).trim();
+      const meetingId = trimmed.slice(colonIdx + 1).trim();
+      if (channel && meetingId) map[channel] = meetingId;
+    }
+  }
+  return map;
 }
 
 export function loadConfig(): RTMSGatewayConfig {
   const clientId = process.env.ZOOM_CLIENT_ID;
   const clientSecret = process.env.ZOOM_CLIENT_SECRET;
   const secretToken = process.env.ZOOM_SECRET_TOKEN;
-  const ircChannel = process.env.IRC_CHANNEL;
+  const channelMeetingMapRaw = process.env.CHANNEL_MEETING_MAP;
 
   if (!clientId || !clientSecret || !secretToken) {
     throw new Error('ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, and ZOOM_SECRET_TOKEN are required');
   }
-  if (!ircChannel) {
-    throw new Error('IRC_CHANNEL is required');
+  if (!channelMeetingMapRaw) {
+    throw new Error('CHANNEL_MEETING_MAP is required (e.g. "#did:5637387869,#wpwg:86873854269")');
+  }
+
+  const channelMeetingMap = parseChannelMeetingMap(channelMeetingMapRaw);
+  if (Object.keys(channelMeetingMap).length === 0) {
+    throw new Error('CHANNEL_MEETING_MAP contains no valid entries');
   }
 
   return {
@@ -53,6 +71,7 @@ export function loadConfig(): RTMSGatewayConfig {
       clientSecret,
       secretToken,
       oauthRedirectUri: process.env.ZOOM_OAUTH_REDIRECT_URI || '',
+      accountId: process.env.ZOOM_ACCOUNT_ID || undefined,
     },
     webhook: {
       port: parseInt(process.env.WEBHOOK_PORT || '3000'),
@@ -63,6 +82,6 @@ export function loadConfig(): RTMSGatewayConfig {
       port: parseInt(process.env.REDIS_PORT || '6379'),
       password: process.env.REDIS_PASSWORD,
     },
-    irc: { channel: ircChannel },
+    channelMeetingMap,
   };
 }

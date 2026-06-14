@@ -26,7 +26,8 @@ export interface StateChangeData {
   previousState: TranscriptionState;
   newState: TranscriptionState;
   reason?: string;
-  triggeredBy?: string; // IRC user who triggered the change
+  triggeredBy?: string;
+  ircChannel?: string;
 }
 
 export interface ErrorData {
@@ -45,7 +46,7 @@ export interface MeetingSession {
 export interface IRCConfig {
   server: string;
   port: number;
-  channel: string;
+  channelMeetingMap: Record<string, string>;
   nick: string;
   username: string;
   realname: string;

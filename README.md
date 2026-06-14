@@ -1,6 +1,6 @@
 # W3C Live Archiver — RTMS Edition
 
-Real-time meeting transcription system for W3C working groups. Uses Zoom's **Real-Time Media Streams (RTMS)** API to receive transcripts server-side — no bot joins the meeting, no C++ code, no Deepgram costs.
+Real-time meeting transcription system for W3C working groups. Uses Zoom's **Real-Time Media Streams (RTMS)** API to receive transcripts server-side — bot does not need to join the meeting.
 
 > **Note:** The legacy Deepgram + Zoom Meeting SDK approach is preserved on the git tag `v0.1-deepgram-zoom-sdk` and archived in `backups/pre-rtms-zoom-sdk-deepgram.zip`.
 
@@ -9,18 +9,19 @@ Real-time meeting transcription system for W3C working groups. Uses Zoom's **Rea
 ```
   Zoom Meeting (host)
         │
-        │  Webhook: meeting.rtms_started / meeting.rtms_stopped
+        │  Webhooks: meeting.started / meeting.rtms_started / meeting.rtms_stopped
         ▼
   ┌─────────────────┐
   │  RTMS Gateway   │  Node.js/TypeScript
   │  (Express +     │  Webhook signature verification
   │   @zoom/rtms    │  RTMS session management
-  │   SDK)          │
+  │   SDK)          │  Manual RTMS start via REST API
   └────────┬────────┘
            │  Redis pub/sub (transcript events + commands)
            ▼
   ┌─────────────────┐
   │    IRC Bot      │  Node.js/TypeScript
+  │                 │  Invite-based channel joining
   │                 │  Transcript buffering
   │                 │  IRC command handling
   └─────────────────┘
@@ -29,27 +30,41 @@ Real-time meeting transcription system for W3C working groups. Uses Zoom's **Rea
      IRC Channel
 ```
 
-**Data flow:** Zoom meeting → RTMS webhook → RTMS Gateway → Redis → IRC Bot → IRC channel
+**Data flow:** Zoom meeting → `meeting.started` webhook → IRC `connect` command → RTMS Gateway calls Zoom API → `meeting.rtms_started` webhook → `@zoom/rtms` SDK → Redis → IRC Bot → IRC channel
 
 ## How It Works
 
-1. The **RTMS Gateway** is a webhook server. When a meeting starts, Zoom POSTs a `meeting.rtms_started` event to it. The gateway uses the official `@zoom/rtms` Node.js SDK to connect to Zoom's media stream and receive real-time transcript segments with speaker names already attributed.
+1. The **RTMS Gateway** is a webhook server. It receives `meeting.started` events from Zoom and logs which IRC channel the meeting maps to, but does **not** start RTMS automatically.
 
-2. Transcript segments are published to Redis and picked up by the **IRC Bot**, which buffers them briefly to consolidate short utterances, then posts them to the configured IRC channel.
+2. The **IRC Bot** waits to be **invited** to an IRC channel rather than auto-joining. On receiving an invite it checks whether the channel is in its authorised list (`CHANNEL_MEETING_MAP`). If authorised it joins and announces itself; if not it posts an apology message and leaves.
 
-3. Meeting chairs can control transcription from IRC using `transcriber-bot, <command>` commands.
+3. Once the bot is in the channel and a Zoom meeting is running, a chair types `transcriber-bot, connect`. The gateway looks up the meeting ID for that IRC channel and calls Zoom's REST API to manually start RTMS.
+
+4. Zoom confirms via a `meeting.rtms_started` webhook. The gateway uses the `@zoom/rtms` SDK to connect to the media stream and receive real-time transcript segments with speaker attribution.
+
+5. Transcript segments are published to Redis and picked up by the IRC Bot, which buffers them briefly to consolidate short utterances, then posts them to the IRC channel.
+
+6. Chairs can pause and resume transcription mid-meeting. When the meeting ends Zoom fires `meeting.rtms_stopped` and the system returns to idle.
 
 ## IRC Output Example
 
 ```
-transcriber-bot: Transcription bot ready. Type "transcriber-bot, help" for commands.
-transcriber-bot: Otto Mora: Good morning everyone, let's get started...
-transcriber-bot: Jane Smith: Thanks for joining, today's agenda has three items...
+--> transcriber-bot has joined #wpwg
+* transcriber-bot Transcription bot ready. Type "transcriber-bot, help" for commands.
+ottomorac: transcriber-bot, connect
+* transcriber-bot Attempting to connect to the Zoom meeting — transcription will start automatically once connected.
+* transcriber-bot ▶️  Transcription ACTIVE (RTMS connected)
+<transcriber-bot> scribe+
+<transcriber-bot> Otto Mora: Good morning everyone, let's get started...
+<transcriber-bot> Jane Smith: Thanks for joining, today's agenda has three items...
 ottomorac: transcriber-bot, pause
-transcriber-bot: Transcription PAUSED (Paused by ottomorac)
+* transcriber-bot ⏸️  Transcription PAUSED (Paused by ottomorac)
 ottomorac: transcriber-bot, resume
-transcriber-bot: Transcription ACTIVE (Resumed by ottomorac)
-transcriber-bot: Jane Smith: As I was saying, the first item is...
+* transcriber-bot ▶️  Transcription ACTIVE (Resumed by ottomorac)
+<transcriber-bot> Jane Smith: As I was saying, the first item is...
+ottomorac: transcriber-bot, please excuse us
+* transcriber-bot Happy to be of service bye!
+<-- transcriber-bot has left #wpwg
 ```
 
 ## Components
@@ -73,18 +88,17 @@ transcriber-bot: Jane Smith: As I was saying, the first item is...
 ### 1. Create a Zoom Marketplace App
 
 1. Go to [marketplace.zoom.us](https://marketplace.zoom.us) → **Develop** → **Build App**
-2. Choose **General App** type
-3. Under **Information**, fill in the app name and description
-4. Under **OAuth**, set:
+2. Choose **OAuth** (user-managed) app type — RTMS only works with user-level apps, not server-to-server OAuth
+3. Under **OAuth**, set:
    - **OAuth Redirect URL**: `https://your-ngrok-url.ngrok-free.app/oauth/callback`
-5. Under **Scopes**, add:
-   - `meeting:read:meeting_transcript`
-   - Any other RTMS-related scopes available (search "rtms")
-6. Under **Feature**, enable **Real-time Media Streams (RTMS)**
-7. Under **Feature → Event Subscriptions**, add a new subscription:
+4. Under **Scopes**, add:
+   - `meeting:update:participant_rtms_app_status`
+   - `meeting:update:participant_rtms_app_status:admin`
+5. Under **Feature**, enable **Real-time Media Streams (RTMS)** and **disable** the auto-start option (the bot starts RTMS manually via IRC command)
+6. Under **Feature → Event Subscriptions**, add a new subscription:
    - **Event notification endpoint URL**: `https://your-ngrok-url.ngrok-free.app/webhook`
-   - Subscribe to events: `meeting.rtms_started`, `meeting.rtms_stopped`
-8. Save and note your **Client ID**, **Client Secret**, and **Secret Token**
+   - Subscribe to events: `meeting.started`, `meeting.rtms_started`, `meeting.rtms_stopped`
+7. Save and note your **Client ID**, **Client Secret**, and **Secret Token**
 
 ### 2. Request RTMS Enablement
 
@@ -108,7 +122,8 @@ Edit `.env` with your values:
 # IRC
 IRC_SERVER=irc.w3.org
 IRC_PORT=6667
-IRC_CHANNEL="#your-channel"
+# Map IRC channels to their Zoom meeting IDs (comma-separated channel:meetingId pairs)
+CHANNEL_MEETING_MAP="#did:5637387869,#wpwg:86873854269"
 IRC_BOT_NICK=transcriber-bot
 
 # Redis
@@ -129,6 +144,8 @@ ZM_RTMS_SECRET=your_client_secret
 WEBHOOK_PORT=3000
 WEBHOOK_PATH=/webhook
 ```
+
+`CHANNEL_MEETING_MAP` is the authorised list of IRC channels and their corresponding Zoom meeting IDs. The bot will only join channels on this list and will only start RTMS for the mapped meeting.
 
 ### 5. Start Redis
 
@@ -166,50 +183,61 @@ Open in your browser:
 https://your-ngrok-url.ngrok-free.app/oauth/install
 ```
 
-This redirects you to Zoom's OAuth authorization page. Approve the app. You should see "App installed successfully" and the terminal will log `OAuth token exchange successful — app installed`.
+This redirects you to Zoom's OAuth authorization page. Approve the app. You should see "App installed successfully" and the terminal will log `OAuth token exchange successful — app installed, access token stored`.
 
-You only need to do this once per account (or after adding new scopes).
+You only need to do this once per gateway restart (the token is held in memory).
 
-### 9. Test
+### 9. Invite the bot to an IRC channel
 
-Start a Zoom meeting as the host. Within a few seconds you should see in the terminal:
+The bot does not auto-join channels. Invite it from within the target channel:
 
 ```
-[RTMSGateway] Webhook event: meeting.rtms_started
-[RTMSSession] Starting RTMS session via SDK for meeting ...
-[RTMSSession] Transcript: Your Name: Hello this is a test...
+/invite transcriber-bot #wpwg
 ```
 
-And in your IRC channel:
+The bot checks whether `#wpwg` is in `CHANNEL_MEETING_MAP`. If authorised it joins and announces itself. If not, it posts an apology and leaves.
+
+### 10. Start a meeting and connect
+
+Start the corresponding Zoom meeting as host, then in the IRC channel type:
+
 ```
-transcriber-bot: Your Name: Hello this is a test...
+transcriber-bot, connect
 ```
+
+The gateway calls Zoom's API to start RTMS for that meeting. Within a few seconds transcription will begin and the bot announces `▶️  Transcription ACTIVE`.
 
 ## IRC Commands
 
 All commands use the format `transcriber-bot, <command>` (the bot's IRC nick followed by a comma).
 
-| Command | Access | Description |
-|---------|--------|-------------|
-| `transcriber-bot, pause` | Anyone | Pause transcription (off the record) |
-| `transcriber-bot, resume` | Anyone | Resume transcription |
-| `transcriber-bot, status` | Anyone | Show current transcription status |
-| `transcriber-bot, scribe` | Anyone | Toggle W3C scribe mode (`scribe+`/`scribe-`) |
-| `transcriber-bot, help` | Anyone | Show available commands |
+| Command | Description |
+|---------|-------------|
+| `transcriber-bot, connect` | Start RTMS for this channel's Zoom meeting and begin transcription |
+| `transcriber-bot, pause` | Pause transcription (go off the record) |
+| `transcriber-bot, resume` | Resume transcription after a pause |
+| `transcriber-bot, status` | Show current transcription status |
+| `transcriber-bot, please excuse us` | Bot emotes a goodbye message and leaves the IRC channel |
+| `transcriber-bot, help` | Show available commands |
 
-By default the transcriber-bot joins an IRC channel in "paused mode". This means it needs to be told resume in order to start transcribing meeting notes:
+### Command details
 
-```
-transcriber-bot, resume
-```
+**`connect`** — Triggers the full RTMS startup sequence for the Zoom meeting associated with the current IRC channel (via `CHANNEL_MEETING_MAP`). The bot replies immediately to confirm the attempt; the `▶️  Transcription ACTIVE` announcement follows once Zoom confirms RTMS is running (usually within a few seconds). If no Zoom meeting is currently in progress the command has no effect.
+
+**`pause`** — Silences transcript output in IRC without disconnecting from the RTMS stream. Useful for off-the-record discussions. The bot posts `scribe-` to signal the change to W3C tooling.
+
+**`resume`** — Resumes posting transcripts after a pause. The bot posts `scribe+`.
+
+**`please excuse us`** — The bot emotes `Happy to be of service bye!` and then parts the IRC channel. To invite it back use `/invite transcriber-bot #channel-name`.
 
 ## Configuration Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `CHANNEL_MEETING_MAP` | Yes | Comma-separated `#channel:meetingId` pairs of authorised channels (e.g. `"#did:5637387869,#wpwg:86873854269"`) |
 | `ZOOM_CLIENT_ID` | Yes | OAuth Client ID from Zoom Marketplace |
 | `ZOOM_CLIENT_SECRET` | Yes | OAuth Client Secret from Zoom Marketplace |
-| `ZOOM_SECRET_TOKEN` | Yes | Secret Token from Event Subscriptions section |
+| `ZOOM_SECRET_TOKEN` | Yes | Secret Token from Event Subscriptions section (not the Client Secret) |
 | `ZM_RTMS_CLIENT` | Yes | Same as `ZOOM_CLIENT_ID` (used by `@zoom/rtms` SDK) |
 | `ZM_RTMS_SECRET` | Yes | Same as `ZOOM_CLIENT_SECRET` (used by `@zoom/rtms` SDK) |
 | `ZOOM_OAUTH_REDIRECT_URI` | Yes | Full public URL for OAuth callback (ngrok URL + `/oauth/callback`) |
@@ -217,18 +245,26 @@ transcriber-bot, resume
 | `WEBHOOK_PATH` | No | Webhook endpoint path (default: `/webhook`) |
 | `IRC_SERVER` | Yes | IRC server hostname |
 | `IRC_PORT` | No | IRC server port (default: `6667`) |
-| `IRC_CHANNEL` | Yes | IRC channel to post transcripts to |
 | `IRC_BOT_NICK` | No | Bot's IRC nick (default: `transcriber-bot`) |
 | `REDIS_HOST` | No | Redis hostname (default: `localhost`) |
 | `REDIS_PORT` | No | Redis port (default: `6379`) |
 
 ## Troubleshooting
 
-**No `meeting.rtms_started` webhook received when starting a meeting**
-- Confirm Zoom emailed you that RTMS is enabled on your account
-- Confirm the app is installed on your account (visit `/oauth/install`)
-- Confirm the event subscription includes `meeting.rtms_started`
-- Confirm ngrok is running and the endpoint URL in Zoom matches
+**Bot joins a channel then immediately leaves**
+- The channel is not in `CHANNEL_MEETING_MAP`. Add the channel and its Zoom meeting ID to the variable and restart.
+
+**`transcriber-bot, connect` has no effect**
+- Confirm a Zoom meeting is currently in progress for the mapped meeting ID
+- Confirm the gateway has a valid OAuth token (visit `/oauth/install` if the gateway was restarted)
+- Check the gateway logs for "CONNECT" and "startRTMS" lines to see the API response
+
+**No `meeting.rtms_started` webhook after a successful `connect`**
+- Confirm RTMS auto-start is **disabled** in your Zoom app's Feature settings (if auto-start is on, Zoom may have already started and stopped RTMS before `connect` was typed)
+- Confirm `meeting.rtms_started` is listed under Event Subscriptions in your Zoom app
+
+**Webhook signature invalid**
+- Check that `ZOOM_SECRET_TOKEN` matches the **Secret Token** in your Zoom app's Event Subscriptions section (not the Client Secret)
 
 **`ZM_RTMS_CLIENT cannot be empty` error**
 - Make sure `ZM_RTMS_CLIENT` and `ZM_RTMS_SECRET` are set in `.env`
@@ -237,21 +273,25 @@ transcriber-bot, resume
 - Create the logs directory: `mkdir -p packages/rtms-gateway/logs`
 - These are non-fatal; the SDK just can't write its internal log files
 
-**Webhook signature invalid**
-- Check that `ZOOM_SECRET_TOKEN` matches the Secret Token in your Zoom app's Event Subscriptions section (not the Client Secret)
-
 **ngrok URL changes on every restart**
 - Update the OAuth Redirect URL and Event notification endpoint URL in your Zoom app settings after each ngrok restart
 - Consider a paid ngrok account for a stable domain
+
+**OAuth token lost after gateway restart**
+- The access token is stored in memory only. Visit `/oauth/install` again after restarting the gateway to get a fresh token.
 
 ## Project Status
 
 - [x] RTMS webhook integration
 - [x] Real-time transcription via `@zoom/rtms` SDK
 - [x] Speaker attribution (from Zoom, no Deepgram needed)
-- [x] IRC bot with pause/resume/chair commands
+- [x] Invite-based IRC channel joining with channel authorisation
+- [x] Manual RTMS start via IRC `connect` command
+- [x] Channel-to-meeting mapping (`CHANNEL_MEETING_MAP`)
+- [x] IRC bot with connect/pause/resume/leave commands
 - [x] Transcript buffering (consolidated IRC output)
 - [x] W3C scribe mode toggle
+- [ ] Persistent OAuth token storage (survive gateway restarts)
 - [ ] Production deployment (persistent process, stable webhook URL)
 - [ ] Web API for remote meeting control
 

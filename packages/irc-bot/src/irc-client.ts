@@ -5,7 +5,6 @@
 import type { IRCConfig } from '@transcriber/shared';
 import { EventEmitter } from 'events';
 
-// Use require for irc-framework to avoid CommonJS/ESM compatibility issues
 const IrcFramework = require('irc-framework');
 const Client = IrcFramework.Client || IrcFramework;
 
@@ -15,8 +14,13 @@ export interface IRCMessage {
   message: string;
 }
 
+export interface IRCInvite {
+  channel: string;
+  invitedBy: string;
+}
+
 export class IRCClient extends EventEmitter {
-  private client: any; // IRC Framework client
+  private client: any;
   private connected = false;
 
   constructor(private config: IRCConfig) {
@@ -29,23 +33,34 @@ export class IRCClient extends EventEmitter {
     this.client.on('registered', () => {
       console.log('[IRC] Connected to server');
       this.connected = true;
-      this.client.join(this.config.channel);
+      // No auto-join — bot waits to be invited
     });
 
-    this.client.on('join', (event) => {
+    this.client.on('join', (event: any) => {
       if (event.nick === this.client.user.nick) {
         console.log(`[IRC] Joined channel: ${event.channel}`);
         this.emit('joined', event.channel);
       }
     });
 
-    this.client.on('privmsg', (event) => {
+    this.client.on('part', (event: any) => {
+      if (event.nick === this.client.user.nick) {
+        console.log(`[IRC] Left channel: ${event.channel}`);
+        this.emit('parted', event.channel);
+      }
+    });
+
+    this.client.on('invite', (event: any) => {
+      console.log(`[IRC] Invited to ${event.channel} by ${event.nick}`);
+      this.emit('invited', { channel: event.channel, invitedBy: event.nick } as IRCInvite);
+    });
+
+    this.client.on('privmsg', (event: any) => {
       const message: IRCMessage = {
         nick: event.nick,
         channel: event.target,
         message: event.message
       };
-
       this.emit('message', message);
     });
 
@@ -63,7 +78,6 @@ export class IRCClient extends EventEmitter {
 
   connect(): void {
     console.log(`[IRC] Connecting to ${this.config.server}:${this.config.port}`);
-
     this.client.connect({
       host: this.config.server,
       port: this.config.port,
@@ -77,12 +91,24 @@ export class IRCClient extends EventEmitter {
     });
   }
 
+  join(channel: string): void {
+    if (!this.connected) {
+      console.warn('[IRC] Cannot join channel: not connected');
+      return;
+    }
+    this.client.join(channel);
+  }
+
+  part(channel: string, message?: string): void {
+    if (!this.connected) return;
+    this.client.part(channel, message ?? '');
+  }
+
   say(target: string, message: string): void {
     if (!this.connected) {
       console.warn('[IRC] Cannot send message: not connected');
       return;
     }
-
     this.client.say(target, message);
   }
 
@@ -91,7 +117,6 @@ export class IRCClient extends EventEmitter {
       console.warn('[IRC] Cannot send action: not connected');
       return;
     }
-
     this.client.action(target, message);
   }
 

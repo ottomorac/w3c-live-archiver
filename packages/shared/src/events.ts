@@ -10,6 +10,7 @@ export const REDIS_CHANNELS = {
 } as const;
 
 export enum CommandType {
+  CONNECT = 'connect',
   PAUSE = 'pause',
   RESUME = 'resume',
   STATUS = 'status',
@@ -17,7 +18,8 @@ export enum CommandType {
 
 export interface Command {
   type: CommandType;
-  triggeredBy: string; // IRC nick
+  triggeredBy: string;
   timestamp: number;
+  channel?: string;
   args?: Record<string, unknown>;
 }

@@ -10,6 +10,7 @@ import {
   REDIS_CHANNELS,
   CommandType,
   type TranscriptSegment,
+  type Command,
 } from '@transcriber/shared';
 import { SessionManager } from './session-manager';
 import { RTMSSession } from './rtms-session';
@@ -19,6 +20,9 @@ export class RTMSGateway {
   private app = express();
   private sessionManager: SessionManager;
   private activeSessions = new Map<string, RTMSSession>(); // streamId → session
+
+  private currentIrcChannel: string | null = null;
+  private userAccessToken: string | null = null;
 
   constructor(
     private config: RTMSGatewayConfig,
@@ -36,13 +40,12 @@ export class RTMSGateway {
 
   async start(): Promise<void> {
     console.log('[RTMSGateway] Starting...');
-    await this.sessionManager.createSession(this.config.irc.channel);
-    await this.sessionManager.updateState(TranscriptionState.ACTIVE, 'Started');
+    await this.sessionManager.createSession();
 
     const { port, path } = this.config.webhook;
     this.app.listen(port, () => {
       console.log(`[RTMSGateway] Webhook listening on port ${port} at ${path}`);
-      console.log('[RTMSGateway] Ready — waiting for Zoom RTMS events');
+      console.log('[RTMSGateway] Ready — RTMS will connect when Zoom auto-starts it for an authorised meeting');
     });
   }
 
@@ -59,11 +62,10 @@ export class RTMSGateway {
   // ---------------------------------------------------------------------------
 
   private setupWebhook(): void {
-    // Parse raw body for signature verification before JSON parsing
     this.app.use(express.raw({ type: '*/*' }));
 
     // OAuth install — open this URL in a browser to install the app on your account
-    this.app.get('/oauth/install', (req: Request, res: Response) => {
+    this.app.get('/oauth/install', (_req: Request, res: Response) => {
       const { clientId, oauthRedirectUri } = this.config.zoom;
       const url = `https://zoom.us/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(oauthRedirectUri)}`;
       console.log('[RTMSGateway] OAuth install — redirecting to Zoom authorization');
@@ -97,7 +99,9 @@ export class RTMSGateway {
         });
 
         if (response.ok) {
-          console.log('[RTMSGateway] OAuth token exchange successful — app installed');
+          const data: any = await response.json();
+          this.userAccessToken = data.access_token;
+          console.log('[RTMSGateway] OAuth token exchange successful — app installed, access token stored');
           res.send('<html><body><h2>App installed successfully. You may close this tab.</h2></body></html>');
         } else {
           const err = await response.text();
@@ -131,7 +135,6 @@ export class RTMSGateway {
       console.log(`[RTMSGateway] Webhook event: ${event}`);
 
       if (event === 'endpoint.url_validation') {
-        // Zoom verifies the webhook URL on first setup
         const plainToken: string = payload.plainToken;
         const encryptedToken = createHmac('sha256', this.config.zoom.secretToken)
           .update(plainToken)
@@ -142,10 +145,16 @@ export class RTMSGateway {
 
       res.status(200).send();
 
-      if (event === 'meeting.rtms_started') {
-        this.handleRTMSStarted(payload);
+      if (event === 'meeting.started') {
+        this.handleMeetingStarted(payload);
+      } else if (event === 'meeting.rtms_started') {
+        this.handleRTMSStarted(payload).catch((err) =>
+          console.error('[RTMSGateway] Error handling rtms_started:', err)
+        );
       } else if (event === 'meeting.rtms_stopped') {
-        this.handleRTMSStopped(payload);
+        this.handleRTMSStopped(payload).catch((err) =>
+          console.error('[RTMSGateway] Error handling rtms_stopped:', err)
+        );
       }
     });
   }
@@ -161,7 +170,6 @@ export class RTMSGateway {
       .update(message)
       .digest('hex');
 
-    // Constant-time comparison to prevent timing attacks
     try {
       return timingSafeEqual(Buffer.from(expectedSig), Buffer.from(receivedSig));
     } catch {
@@ -170,13 +178,71 @@ export class RTMSGateway {
   }
 
   // ---------------------------------------------------------------------------
+  // Manual RTMS start via REST API (triggered by meeting.started)
+  // ---------------------------------------------------------------------------
+
+  private handleMeetingStarted(payload: any): void {
+    const meetingId = String(payload.object?.id ?? '');
+    const topic = payload.object?.topic ?? '';
+    const ircChannel = this.lookupChannelByMeetingId(meetingId);
+    console.log(
+      `[RTMSGateway] meeting.started: id=${meetingId}, topic="${topic}"` +
+      (ircChannel ? ` → mapped to ${ircChannel}` : ' (not in CHANNEL_MEETING_MAP)')
+    );
+  }
+
+  private async callStartRTMS(meetingId: string, accessToken: string): Promise<void> {
+    const url = `https://api.zoom.us/v2/live_meetings/${encodeURIComponent(meetingId)}/rtms_app/status`;
+    const body = JSON.stringify({
+      action: 'start',
+      settings: { client_id: this.config.zoom.clientId },
+    });
+
+    console.log(`[RTMSGateway] startRTMS → PATCH ${url}`);
+    console.log(`[RTMSGateway] startRTMS → body: ${body}`);
+
+    let response: globalThis.Response;
+    try {
+      response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+    } catch (err) {
+      console.error('[RTMSGateway] startRTMS → network error:', err);
+      return;
+    }
+
+    const responseText = await response.text();
+    console.log(`[RTMSGateway] startRTMS → HTTP ${response.status} ${response.statusText}`);
+    console.log(`[RTMSGateway] startRTMS → response body: ${responseText || '(empty)'}`);
+
+    if (response.ok || response.status === 204) {
+      console.log('[RTMSGateway] startRTMS API call succeeded — waiting for meeting.rtms_started webhook');
+    } else {
+      console.error(`[RTMSGateway] startRTMS API call failed (${response.status})`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // RTMS session lifecycle
   // ---------------------------------------------------------------------------
 
-  private handleRTMSStarted(payload: any): void {
+  private async handleRTMSStarted(payload: any): Promise<void> {
     const { meeting_uuid, rtms_stream_id } = payload;
+    const meetingId = String(payload.meeting_id ?? payload.id ?? '');
+
     if (!meeting_uuid || !rtms_stream_id) {
       console.error('[RTMSGateway] rtms_started payload missing required fields:', payload);
+      return;
+    }
+
+    const ircChannel = this.lookupChannelByMeetingId(meetingId);
+    if (!ircChannel) {
+      console.log(`[RTMSGateway] Ignoring RTMS for unrecognised meeting ${meetingId}`);
       return;
     }
 
@@ -185,19 +251,22 @@ export class RTMSGateway {
       return;
     }
 
-    console.log(`[RTMSGateway] Starting RTMS session: meeting=${meeting_uuid}, stream=${rtms_stream_id}`);
+    console.log(`[RTMSGateway] Connecting RTMS: meeting=${meeting_uuid} (${meetingId}), channel=${ircChannel}, stream=${rtms_stream_id}`);
+
+    this.currentIrcChannel = ircChannel;
 
     const session = new RTMSSession(payload);
-
     session.on('transcript', async (t) => {
       await this.handleTranscript(t);
     });
 
     this.activeSessions.set(rtms_stream_id, session);
     session.start();
+
+    await this.sessionManager.updateState(TranscriptionState.ACTIVE, 'RTMS connected', ircChannel);
   }
 
-  private handleRTMSStopped(payload: any): void {
+  private async handleRTMSStopped(payload: any): Promise<void> {
     const { rtms_stream_id } = payload;
     const session = this.activeSessions.get(rtms_stream_id);
     if (session) {
@@ -205,6 +274,20 @@ export class RTMSGateway {
       this.activeSessions.delete(rtms_stream_id);
       console.log(`[RTMSGateway] Session stopped: stream=${rtms_stream_id}`);
     }
+
+    if (this.activeSessions.size === 0) {
+      this.currentIrcChannel = null;
+      await this.sessionManager.updateState(TranscriptionState.IDLE, 'Meeting ended');
+    }
+  }
+
+  // Reverse lookup: meeting ID string → IRC channel name
+  private lookupChannelByMeetingId(meetingId: string): string | null {
+    if (!meetingId) return null;
+    for (const [channel, id] of Object.entries(this.config.channelMeetingMap)) {
+      if (id === meetingId) return channel;
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -212,9 +295,7 @@ export class RTMSGateway {
   // ---------------------------------------------------------------------------
 
   private async handleTranscript(t: { speaker: string; text: string; timestamp: number }): Promise<void> {
-    if (this.sessionManager.getState() !== TranscriptionState.ACTIVE) {
-      return;
-    }
+    if (this.sessionManager.getState() !== TranscriptionState.ACTIVE) return;
 
     const segment: TranscriptSegment = {
       speaker: t.speaker,
@@ -230,23 +311,48 @@ export class RTMSGateway {
   }
 
   // ---------------------------------------------------------------------------
-  // IRC command handlers (pause / resume / chair)
+  // IRC command handlers
   // ---------------------------------------------------------------------------
 
   private setupCommandHandlers(): void {
+    this.sessionManager.onCommand(CommandType.CONNECT, async (cmd: Command) => {
+      const channel = cmd.channel;
+      if (!channel) {
+        console.error('[RTMSGateway] CONNECT command missing channel');
+        return;
+      }
+
+      const meetingId = this.config.channelMeetingMap[channel];
+      if (!meetingId) {
+        console.error(`[RTMSGateway] CONNECT: no meeting ID configured for channel ${channel}`);
+        return;
+      }
+
+      if (!this.userAccessToken) {
+        console.error('[RTMSGateway] CONNECT: no OAuth access token — visit /oauth/install first');
+        return;
+      }
+
+      console.log(`[RTMSGateway] CONNECT from ${channel} (by ${cmd.triggeredBy}) — starting RTMS for meeting ${meetingId}`);
+      await this.callStartRTMS(meetingId, this.userAccessToken);
+    });
+
     this.sessionManager.onCommand(CommandType.PAUSE, async (cmd: Command) => {
       console.log(`[RTMSGateway] Pausing transcription (by ${cmd.triggeredBy})`);
       await this.sessionManager.updateState(
         TranscriptionState.PAUSED,
         `Paused by ${cmd.triggeredBy}`,
+        cmd.channel,
       );
     });
 
     this.sessionManager.onCommand(CommandType.RESUME, async (cmd: Command) => {
-      console.log(`[RTMSGateway] Resuming transcription (by ${cmd.triggeredBy})`);
+      const channel = cmd.channel ?? this.currentIrcChannel ?? undefined;
+      console.log(`[RTMSGateway] Resuming transcription (by ${cmd.triggeredBy}) for channel ${channel ?? 'unknown'}`);
       await this.sessionManager.updateState(
         TranscriptionState.ACTIVE,
         `Resumed by ${cmd.triggeredBy}`,
+        channel,
       );
     });
   }

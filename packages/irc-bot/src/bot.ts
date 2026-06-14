@@ -12,7 +12,7 @@ import {
   type StateChangeData,
   type TranscriptionEvent
 } from '@transcriber/shared';
-import { IRCClient, type IRCMessage } from './irc-client';
+import { IRCClient, type IRCMessage, type IRCInvite } from './irc-client';
 import { CommandHandler } from './command-handler';
 import type { BotConfig } from './config';
 
@@ -30,6 +30,8 @@ export class TranscriptionBot {
   private ircClient: IRCClient;
   private commandHandler: CommandHandler;
   private currentState: TranscriptionState = TranscriptionState.IDLE;
+  private currentChannel: string | null = null;
+  private activeChannels = new Set<string>();
   private buffer: TranscriptBuffer | null = null;
   private lastPostedSpeaker: string | null = null;
   private sleepTimer: NodeJS.Timeout | null = null;
@@ -47,11 +49,35 @@ export class TranscriptionBot {
   }
 
   private setupIRCHandlers(): void {
+    this.ircClient.on('invited', (invite: IRCInvite) => {
+      console.log(`[Bot] Invited to ${invite.channel} by ${invite.invitedBy}`);
+      this.ircClient.join(invite.channel);
+    });
+
     this.ircClient.on('joined', (channel: string) => {
-      this.sendAction(`Transcription bot ready. Type "${this.config.irc.nick}, help" for commands.`);
+      if (this.config.irc.channelMeetingMap[channel]) {
+        this.activeChannels.add(channel);
+        this.ircClient.action(channel, `Transcription bot ready. Type "${this.config.irc.nick}, help" for commands.`);
+      } else {
+        this.ircClient.action(channel, 'Apologies I am not configured for this channel, please contact W3C staff to configure me');
+        this.ircClient.part(channel);
+      }
+    });
+
+    this.ircClient.on('parted', (channel: string) => {
+      this.activeChannels.delete(channel);
+      if (this.currentChannel === channel) {
+        this.currentChannel = null;
+      }
     });
 
     this.ircClient.on('message', async (msg: IRCMessage) => {
+      if (this.isLeaveCommand(msg.message)) {
+        this.ircClient.action(msg.channel, 'Happy to be of service bye!');
+        this.ircClient.part(msg.channel);
+        return;
+      }
+
       const response = await this.commandHandler.handleMessage({
         nick: msg.nick,
         channel: msg.channel,
@@ -59,12 +85,13 @@ export class TranscriptionBot {
       });
 
       if (response) {
-        this.sendAction(response);
+        this.sendAction(response, msg.channel);
       }
     });
 
     this.ircClient.on('disconnected', () => {
       console.log('[Bot] IRC disconnected, attempting reconnect...');
+      this.activeChannels.clear();
       setTimeout(() => this.ircClient.connect(), 5000);
     });
   }
@@ -98,9 +125,7 @@ export class TranscriptionBot {
   }
 
   private handleTranscriptEvent(event: TranscriptionEvent): void {
-    if (event.type !== 'transcript') {
-      return;
-    }
+    if (event.type !== 'transcript') return;
 
     this.resetSleepTimer();
     const segment = event.data as TranscriptSegment;
@@ -108,14 +133,15 @@ export class TranscriptionBot {
   }
 
   private handleStateChange(event: TranscriptionEvent): void {
-    if (event.type !== 'state_change') {
-      return;
-    }
+    if (event.type !== 'state_change') return;
 
     const stateChange = event.data as StateChangeData;
     this.currentState = stateChange.newState;
 
-    // Flush any pending transcript before posting state change
+    if (stateChange.ircChannel) {
+      this.currentChannel = stateChange.ircChannel;
+    }
+
     this.flushBuffer();
     this.lastPostedSpeaker = null;
 
@@ -175,11 +201,8 @@ export class TranscriptionBot {
   }
 
   private postTranscript(segment: TranscriptSegment): void {
-    if (this.currentState !== TranscriptionState.ACTIVE) {
-      return;
-    }
+    if (this.currentState !== TranscriptionState.ACTIVE) return;
 
-    // If speaker changed, flush previous buffer first
     if (this.buffer && this.buffer.speaker !== segment.speaker) {
       this.flushBuffer();
     }
@@ -188,16 +211,13 @@ export class TranscriptionBot {
       this.buffer = { speaker: segment.speaker, text: '', timer: null };
     }
 
-    // Append text to buffer
     const separator = this.buffer.text ? ' ' : '';
     this.buffer.text += separator + segment.text;
 
-    // If buffer exceeds max line length, flush it
     const fullLine = `${this.buffer.speaker}: ${this.buffer.text}`;
     if (fullLine.length >= MAX_LINE_LENGTH) {
       this.flushBuffer();
     } else {
-      // Reset the flush timer
       this.resetFlushTimer();
     }
   }
@@ -209,9 +229,9 @@ export class TranscriptionBot {
       clearTimeout(this.buffer.timer);
     }
 
-    const text = this.buffer.text.replace(/[\u2026.]+$/, '');
+    const text = this.buffer.text.replace(/[….]+$/, '');
     const isContinuation = this.buffer.speaker === this.lastPostedSpeaker;
-    const speaker = this.buffer.speaker.replace(/ /g, '\u00A0');
+    const speaker = this.buffer.speaker.replace(/ /g, ' ');
     this.sendMessage(isContinuation ? `... ${text}` : `${speaker}: ${text}...`);
     this.lastPostedSpeaker = this.buffer.speaker;
     this.buffer = null;
@@ -229,29 +249,27 @@ export class TranscriptionBot {
     }, BUFFER_FLUSH_DELAY_MS);
   }
 
-  private sendMessage(message: string): void {
-    if (!this.ircClient.isConnected()) {
-      return;
-    }
+  private isLeaveCommand(message: string): boolean {
+    const prefix = `${this.config.irc.nick},`;
+    if (!message.toLowerCase().startsWith(prefix.toLowerCase())) return false;
+    return message.slice(prefix.length).trim().toLowerCase() === 'please excuse us';
+  }
 
-    const lines = message.split('\n');
-    for (const line of lines) {
-      if (line.trim()) {
-        this.ircClient.say(this.config.irc.channel, line);
-      }
+  private sendMessage(message: string, channel?: string): void {
+    const target = channel ?? this.currentChannel;
+    if (!this.ircClient.isConnected() || !target) return;
+
+    for (const line of message.split('\n')) {
+      if (line.trim()) this.ircClient.say(target, line);
     }
   }
 
-  private sendAction(message: string): void {
-    if (!this.ircClient.isConnected()) {
-      return;
-    }
+  private sendAction(message: string, channel?: string): void {
+    const target = channel ?? this.currentChannel;
+    if (!this.ircClient.isConnected() || !target) return;
 
-    const lines = message.split('\n');
-    for (const line of lines) {
-      if (line.trim()) {
-        this.ircClient.action(this.config.irc.channel, line);
-      }
+    for (const line of message.split('\n')) {
+      if (line.trim()) this.ircClient.action(target, line);
     }
   }
 
