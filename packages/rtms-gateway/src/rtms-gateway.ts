@@ -21,8 +21,11 @@ export class RTMSGateway {
   private sessionManager: SessionManager;
   private activeSessions = new Map<string, RTMSSession>(); // streamId → session
 
+  private static readonly MAX_RTMS_START_ATTEMPTS = 3;
+
   private currentIrcChannel: string | null = null;
   private userAccessToken: string | null = null;
+  private refreshToken: string | null = null;
 
   constructor(
     private config: RTMSGatewayConfig,
@@ -101,6 +104,7 @@ export class RTMSGateway {
         if (response.ok) {
           const data: any = await response.json();
           this.userAccessToken = data.access_token;
+          this.refreshToken = data.refresh_token;
           console.log('[RTMSGateway] OAuth token exchange successful — app installed, access token stored');
           res.send('<html><body><h2>App installed successfully. You may close this tab.</h2></body></html>');
         } else {
@@ -191,40 +195,106 @@ export class RTMSGateway {
     );
   }
 
-  private async callStartRTMS(meetingId: string, accessToken: string): Promise<void> {
+  private async callStartRTMS(meetingId: string): Promise<void> {
+    if (!this.userAccessToken) {
+      console.error('[RTMSGateway] startRTMS: no OAuth access token — visit /oauth/install first');
+      return;
+    }
+
     const url = `https://api.zoom.us/v2/live_meetings/${encodeURIComponent(meetingId)}/rtms_app/status`;
     const body = JSON.stringify({
       action: 'start',
       settings: { client_id: this.config.zoom.clientId },
     });
 
-    console.log(`[RTMSGateway] startRTMS → PATCH ${url}`);
-    console.log(`[RTMSGateway] startRTMS → body: ${body}`);
+    for (let attempt = 1; attempt <= RTMSGateway.MAX_RTMS_START_ATTEMPTS; attempt++) {
+      console.log(`[RTMSGateway] startRTMS → PATCH ${url} (attempt ${attempt}/${RTMSGateway.MAX_RTMS_START_ATTEMPTS})`);
+      console.log(`[RTMSGateway] startRTMS → body: ${body}`);
+
+      let response: globalThis.Response;
+      try {
+        response = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${this.userAccessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body,
+        });
+      } catch (err) {
+        console.error('[RTMSGateway] startRTMS → network error:', err);
+        return;
+      }
+
+      const responseText = await response.text();
+      console.log(`[RTMSGateway] startRTMS → HTTP ${response.status} ${response.statusText}`);
+      console.log(`[RTMSGateway] startRTMS → response body: ${responseText || '(empty)'}`);
+
+      if (response.ok || response.status === 204) {
+        console.log('[RTMSGateway] startRTMS API call succeeded — waiting for meeting.rtms_started webhook');
+        return;
+      }
+
+      if (response.status === 401 && attempt < RTMSGateway.MAX_RTMS_START_ATTEMPTS) {
+        console.warn('[RTMSGateway] startRTMS → 401 Unauthorized, access token likely expired — attempting refresh');
+        const refreshed = await this.refreshAccessToken();
+        if (!refreshed) {
+          console.error('[RTMSGateway] startRTMS → token refresh failed, aborting');
+          return;
+        }
+        continue;
+      }
+
+      console.error(`[RTMSGateway] startRTMS API call failed (${response.status})`);
+      return;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // OAuth token refresh
+  // ---------------------------------------------------------------------------
+
+  private async refreshAccessToken(): Promise<boolean> {
+    if (!this.refreshToken) {
+      console.error('[RTMSGateway] refreshAccessToken: no refresh token available — visit /oauth/install to re-authorize');
+      return false;
+    }
+
+    console.log('[RTMSGateway] Refreshing OAuth access token...');
+    const { clientId, clientSecret } = this.config.zoom;
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
     let response: globalThis.Response;
     try {
-      response = await fetch(url, {
-        method: 'PATCH',
+      response = await fetch('https://zoom.us/oauth/token', {
+        method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+          Authorization: `Basic ${credentials}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body,
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: this.refreshToken,
+        }),
       });
     } catch (err) {
-      console.error('[RTMSGateway] startRTMS → network error:', err);
-      return;
+      console.error('[RTMSGateway] refreshAccessToken → network error:', err);
+      return false;
     }
 
     const responseText = await response.text();
-    console.log(`[RTMSGateway] startRTMS → HTTP ${response.status} ${response.statusText}`);
-    console.log(`[RTMSGateway] startRTMS → response body: ${responseText || '(empty)'}`);
+    console.log(`[RTMSGateway] refreshAccessToken → HTTP ${response.status} ${response.statusText}`);
 
-    if (response.ok || response.status === 204) {
-      console.log('[RTMSGateway] startRTMS API call succeeded — waiting for meeting.rtms_started webhook');
-    } else {
-      console.error(`[RTMSGateway] startRTMS API call failed (${response.status})`);
+    if (!response.ok) {
+      console.error(`[RTMSGateway] refreshAccessToken → failed: ${responseText || '(empty)'}`);
+      return false;
     }
+
+    const data: any = JSON.parse(responseText);
+    this.userAccessToken = data.access_token;
+    this.refreshToken = data.refresh_token;
+    console.log('[RTMSGateway] refreshAccessToken → success, access token updated');
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -334,7 +404,7 @@ export class RTMSGateway {
       }
 
       console.log(`[RTMSGateway] CONNECT from ${channel} (by ${cmd.triggeredBy}) — starting RTMS for meeting ${meetingId}`);
-      await this.callStartRTMS(meetingId, this.userAccessToken);
+      await this.callStartRTMS(meetingId);
     });
 
     this.sessionManager.onCommand(CommandType.PAUSE, async (cmd: Command) => {
