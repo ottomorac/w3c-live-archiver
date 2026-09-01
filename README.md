@@ -185,7 +185,7 @@ https://your-ngrok-url.ngrok-free.app/oauth/install
 
 This redirects you to Zoom's OAuth authorization page. Approve the app. You should see "App installed successfully" and the terminal will log `OAuth token exchange successful — app installed, access token stored`.
 
-You only need to do this once per gateway restart (the token is held in memory).
+You only need to do this once. Tokens are saved to `.zoom-tokens.json` (or the path set by `TOKEN_STORAGE_PATH`) and reloaded automatically on every subsequent gateway restart.
 
 ### 9. Invite the bot to an IRC channel
 
@@ -241,6 +241,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 | `ZM_RTMS_CLIENT` | Yes | Same as `ZOOM_CLIENT_ID` (used by `@zoom/rtms` SDK) |
 | `ZM_RTMS_SECRET` | Yes | Same as `ZOOM_CLIENT_SECRET` (used by `@zoom/rtms` SDK) |
 | `ZOOM_OAUTH_REDIRECT_URI` | Yes | Full public URL for OAuth callback (ngrok URL + `/oauth/callback`) |
+| `TOKEN_STORAGE_PATH` | No | Path to the file where OAuth tokens are persisted across gateway restarts (default: `.zoom-tokens.json` in the project root) |
 | `WEBHOOK_PORT` | No | Port for webhook server (default: `3000`) |
 | `WEBHOOK_PATH` | No | Webhook endpoint path (default: `/webhook`) |
 | `IRC_SERVER` | Yes | IRC server hostname |
@@ -278,7 +279,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 - Consider a paid ngrok account for a stable domain
 
 **OAuth token lost after gateway restart**
-- The access token is stored in memory only. Visit `/oauth/install` again after restarting the gateway to get a fresh token.
+- Tokens are persisted to the file set by `TOKEN_STORAGE_PATH` (default: `.zoom-tokens.json` in the project root) and reloaded automatically on startup. If the file is missing or corrupted, visit `/oauth/install` to re-authorize and generate a new token file.
 
 ## Project Status
 
@@ -291,7 +292,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 - [x] IRC bot with connect/pause/resume/leave commands
 - [x] Transcript buffering (consolidated IRC output)
 - [x] W3C scribe mode toggle
-- [ ] Persistent OAuth token storage (survive gateway restarts)
+- [x] Persistent OAuth token storage (survive gateway restarts)
 - [ ] Production deployment (persistent process, stable webhook URL)
 - [ ] Web API for remote meeting control
 
