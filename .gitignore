@@ -18,3 +18,7 @@ backups/
 packages/rtms-gateway/logs/
 .claude/
 improvements.txt
+
+# OAuth token storage
+*.zoom-tokens.json
+.zoom-tokens.json

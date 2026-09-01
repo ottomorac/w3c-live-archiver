@@ -3,6 +3,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'crypto';
+import { readFileSync, writeFileSync } from 'fs';
 import express, { type Request, type Response } from 'express';
 import type Redis from 'ioredis';
 import {
@@ -43,6 +44,7 @@ export class RTMSGateway {
 
   async start(): Promise<void> {
     console.log('[RTMSGateway] Starting...');
+    this.loadTokens();
     await this.sessionManager.createSession();
 
     const { port, path } = this.config.webhook;
@@ -105,6 +107,7 @@ export class RTMSGateway {
           const data: any = await response.json();
           this.userAccessToken = data.access_token;
           this.refreshToken = data.refresh_token;
+          this.saveTokens();
           console.log('[RTMSGateway] OAuth token exchange successful — app installed, access token stored');
           res.send('<html><body><h2>App installed successfully. You may close this tab.</h2></body></html>');
         } else {
@@ -293,6 +296,7 @@ export class RTMSGateway {
     const data: any = JSON.parse(responseText);
     this.userAccessToken = data.access_token;
     this.refreshToken = data.refresh_token;
+    this.saveTokens();
     console.log('[RTMSGateway] refreshAccessToken → success, access token updated');
     return true;
   }
@@ -378,6 +382,35 @@ export class RTMSGateway {
       REDIS_CHANNELS.TRANSCRIPTION_EVENTS,
       JSON.stringify({ type: 'transcript', data: segment, timestamp: Date.now() }),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Token persistence
+  // ---------------------------------------------------------------------------
+
+  private loadTokens(): void {
+    try {
+      const raw = readFileSync(this.config.tokenStoragePath, 'utf8');
+      const data = JSON.parse(raw);
+      if (data.accessToken) this.userAccessToken = data.accessToken;
+      if (data.refreshToken) this.refreshToken = data.refreshToken;
+      console.log(`[RTMSGateway] Loaded OAuth tokens from ${this.config.tokenStoragePath}`);
+    } catch {
+      console.log(`[RTMSGateway] No token file found at ${this.config.tokenStoragePath} — visit /oauth/install to authorize`);
+    }
+  }
+
+  private saveTokens(): void {
+    try {
+      writeFileSync(
+        this.config.tokenStoragePath,
+        JSON.stringify({ accessToken: this.userAccessToken, refreshToken: this.refreshToken }, null, 2),
+        'utf8',
+      );
+      console.log(`[RTMSGateway] OAuth tokens saved to ${this.config.tokenStoragePath}`);
+    } catch (err) {
+      console.error(`[RTMSGateway] Failed to save tokens to ${this.config.tokenStoragePath}:`, err);
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -35,7 +35,6 @@ export class RTMSSession extends EventEmitter {
       const text = typeof data === 'string' ? data : data.toString('utf8');
       const speaker = metadata?.userName ?? metadata?.user_name ?? 'Unknown';
       if (!text.trim()) return;
-      console.log(`[RTMSSession] Transcript: ${speaker}: ${text}`);
       this.emit('transcript', { speaker, text, timestamp } as RTMSTranscript);
     });
 

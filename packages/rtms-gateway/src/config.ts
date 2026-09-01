@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 import type { RedisConfig } from '@transcriber/shared';
 
 const envPaths = [
@@ -10,9 +10,11 @@ const envPaths = [
   join(process.cwd(), '../../../.env'),
 ];
 
+let projectRoot = process.cwd();
 for (const envPath of envPaths) {
   if (existsSync(envPath)) {
     config({ path: envPath });
+    projectRoot = dirname(envPath);
     break;
   }
 }
@@ -31,6 +33,7 @@ export interface RTMSGatewayConfig {
   };
   redis: RedisConfig;
   channelMeetingMap: Record<string, string>;
+  tokenStoragePath: string;
 }
 
 function parseChannelMeetingMap(raw: string): Record<string, string> {
@@ -83,5 +86,6 @@ export function loadConfig(): RTMSGatewayConfig {
       password: process.env.REDIS_PASSWORD,
     },
     channelMeetingMap,
+    tokenStoragePath: resolve(projectRoot, process.env.TOKEN_STORAGE_PATH || '.zoom-tokens.json'),
   };
 }
