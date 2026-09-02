@@ -77,6 +77,7 @@ ottomorac: transcriber-bot, please excuse us
 
 ## Prerequisites
 
+- **x86_64 (amd64) CPU** — the `@zoom/rtms` SDK ships native binaries only for `linux/x64` and `darwin/x64`. ARM64/aarch64 servers (including AWS Graviton, Raspberry Pi, and Apple Silicon running Linux) are **not supported**.
 - **Node.js 20.3+** (required by the `@zoom/rtms` SDK)
 - **npm 9+**
 - **Redis** server
@@ -266,6 +267,10 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 
 **Webhook signature invalid**
 - Check that `ZOOM_SECRET_TOKEN` matches the **Secret Token** in your Zoom app's Event Subscriptions section (not the Client Secret)
+
+**`Could not locate the bindings file` / `rtms.node` error on startup**
+- The `@zoom/rtms` SDK requires an x86_64 (amd64) machine. ARM64/aarch64 servers are not supported — switch to an x86_64 host.
+- If the architecture is correct, the SDK's install script may have been blocked by npm. Run `npm install-scripts approve @zoom/rtms` then `npm install` to allow it to download the native binary.
 
 **`ZM_RTMS_CLIENT cannot be empty` error**
 - Make sure `ZM_RTMS_CLIENT` and `ZM_RTMS_SECRET` are set in `.env`
