@@ -12,7 +12,7 @@
     "dev:rtms-gateway": "npm run dev -w @transcriber/rtms-gateway",
     "dev:irc": "npm run dev -w @transcriber/irc-bot",
     "dev": "concurrently \"npm:dev:*\"",
-    "clean": "rm -rf packages/*/dist node_modules packages/*/node_modules",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo node_modules packages/*/node_modules",
     "predev": "npm install && npm run build -w @transcriber/shared"
   },
   "devDependencies": {
