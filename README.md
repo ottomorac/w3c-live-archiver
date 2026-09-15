@@ -88,18 +88,20 @@ ottomorac: transcriber-bot, please excuse us
 
 ### 1. Create a Zoom Marketplace App
 
-1. Go to [marketplace.zoom.us](https://marketplace.zoom.us) → **Develop** → **Build App**
-2. Choose **OAuth** (user-managed) app type — RTMS only works with user-level apps, not server-to-server OAuth
-3. Under **OAuth**, set:
+1. Go to [marketplace.zoom.us](https://marketplace.zoom.us) → **Developer** → **Build App** → **General App**
+2. Choose how the app is managed: Basic information → Select how the app is managed → admin-managed
+3. Choose **OAuth** (user-managed) app type — RTMS only works with user-level apps, not server-to-server OAuth
+4. Under **OAuth**, set:
    - **OAuth Redirect URL**: `https://your-ngrok-url.ngrok-free.app/oauth/callback`
-4. Under **Scopes**, add:
+5. Under **Scopes**, add:
    - `meeting:update:participant_rtms_app_status`
    - `meeting:update:participant_rtms_app_status:admin`
-5. Under **Feature**, enable **Real-time Media Streams (RTMS)** and **disable** the auto-start option (the bot starts RTMS manually via IRC command)
-6. Under **Feature → Event Subscriptions**, add a new subscription:
+6. Under **Features → Surface**, enable **Real-time Media Streams (RTMS)** and **disable** the auto-start option (the bot starts RTMS manually via IRC command)
+7. Under **Features → Event Subscriptions**, add a new subscription:
    - **Event notification endpoint URL**: `https://your-ngrok-url.ngrok-free.app/webhook`
    - Subscribe to events: `meeting.started`, `meeting.rtms_started`, `meeting.rtms_stopped`
-7. Save and note your **Client ID**, **Client Secret**, and **Secret Token**
+   - Select 'All users in your account'
+8. Save and note your **Client ID**, **Client Secret**, and **Secret Token**
 
 ### 2. Request RTMS Enablement
 
