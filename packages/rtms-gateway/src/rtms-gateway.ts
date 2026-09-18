@@ -12,6 +12,7 @@ import {
   CommandType,
   type TranscriptSegment,
   type Command,
+  type NotificationData,
 } from '@transcriber/shared';
 import { SessionManager } from './session-manager';
 import { RTMSSession } from './rtms-session';
@@ -154,6 +155,10 @@ export class RTMSGateway {
 
       if (event === 'meeting.started') {
         this.handleMeetingStarted(payload);
+      } else if (event === 'meeting.ended') {
+        this.handleMeetingEnded(payload).catch((err) =>
+          console.error('[RTMSGateway] Error handling meeting.ended:', err)
+        );
       } else if (event === 'meeting.rtms_started') {
         this.handleRTMSStarted(payload).catch((err) =>
           console.error('[RTMSGateway] Error handling rtms_started:', err)
@@ -198,9 +203,10 @@ export class RTMSGateway {
     );
   }
 
-  private async callStartRTMS(meetingId: string): Promise<void> {
+  private async callStartRTMS(meetingId: string, ircChannel: string): Promise<void> {
     if (!this.userAccessToken) {
       console.error('[RTMSGateway] startRTMS: no OAuth access token — visit /oauth/install first');
+      await this.notifyIRC(ircChannel, 'Unable to start transcription — not authorized. Please ask an admin to visit /oauth/install.');
       return;
     }
 
@@ -226,6 +232,7 @@ export class RTMSGateway {
         });
       } catch (err) {
         console.error('[RTMSGateway] startRTMS → network error:', err);
+        await this.notifyIRC(ircChannel, 'Unable to reach Zoom (network error) — please try the connect command again.');
         return;
       }
 
@@ -235,20 +242,30 @@ export class RTMSGateway {
 
       if (response.ok || response.status === 204) {
         console.log('[RTMSGateway] startRTMS API call succeeded — waiting for meeting.rtms_started webhook');
+        await this.notifyIRC(ircChannel, 'Connected to Zoom — waiting for transcript stream to start.');
         return;
       }
 
       if (response.status === 401 && attempt < RTMSGateway.MAX_RTMS_START_ATTEMPTS) {
         console.warn('[RTMSGateway] startRTMS → 401 Unauthorized, access token likely expired — attempting refresh');
+        await this.notifyIRC(ircChannel, 'Access token expired — refreshing authorization, please wait...');
         const refreshed = await this.refreshAccessToken();
         if (!refreshed) {
           console.error('[RTMSGateway] startRTMS → token refresh failed, aborting');
+          await this.notifyIRC(ircChannel, 'Unable to refresh authorization — please ask an admin to visit /oauth/install.');
           return;
         }
         continue;
       }
 
+      if (response.status === 400) {
+        console.error(`[RTMSGateway] startRTMS API call failed (${response.status})`);
+        await this.notifyIRC(ircChannel, 'Unable to start transcription — no active Zoom meeting found. Please ensure the meeting is running and try again.');
+        return;
+      }
+
       console.error(`[RTMSGateway] startRTMS API call failed (${response.status})`);
+      await this.notifyIRC(ircChannel, `Unable to start transcription — Zoom returned an error (${response.status}).`);
       return;
     }
   }
@@ -414,6 +431,26 @@ export class RTMSGateway {
   }
 
   // ---------------------------------------------------------------------------
+  // IRC notifications
+  // ---------------------------------------------------------------------------
+
+  private async handleMeetingEnded(payload: any): Promise<void> {
+    const meetingId = String(payload.object?.id ?? '');
+    const ircChannel = this.lookupChannelByMeetingId(meetingId);
+    if (ircChannel) {
+      await this.notifyIRC(ircChannel, 'The Zoom meeting has ended.');
+    }
+  }
+
+  private async notifyIRC(ircChannel: string, message: string): Promise<void> {
+    const data: NotificationData = { ircChannel, message };
+    await this.redis.publish(
+      REDIS_CHANNELS.TRANSCRIPTION_EVENTS,
+      JSON.stringify({ type: 'notification', data, timestamp: Date.now() }),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // IRC command handlers
   // ---------------------------------------------------------------------------
 
@@ -431,13 +468,8 @@ export class RTMSGateway {
         return;
       }
 
-      if (!this.userAccessToken) {
-        console.error('[RTMSGateway] CONNECT: no OAuth access token — visit /oauth/install first');
-        return;
-      }
-
       console.log(`[RTMSGateway] CONNECT from ${channel} (by ${cmd.triggeredBy}) — starting RTMS for meeting ${meetingId}`);
-      await this.callStartRTMS(meetingId);
+      await this.callStartRTMS(meetingId, channel);
     });
 
     this.sessionManager.onCommand(CommandType.PAUSE, async (cmd: Command) => {
