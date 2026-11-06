@@ -5,7 +5,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import type { IRCConfig, RedisConfig } from '@transcriber/shared';
+import { parseChannelMeetingMap, type IRCConfig, type RedisConfig } from '@transcriber/shared';
 
 const envPaths = [
   join(process.cwd(), '.env'),
@@ -29,20 +29,6 @@ export interface BotConfig {
   };
 }
 
-function parseChannelMeetingMap(raw: string): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const entry of raw.split(',')) {
-    const trimmed = entry.trim();
-    const colonIdx = trimmed.lastIndexOf(':');
-    if (colonIdx > 0) {
-      const channel = trimmed.slice(0, colonIdx).trim();
-      const meetingId = trimmed.slice(colonIdx + 1).trim();
-      if (channel && meetingId) map[channel] = meetingId;
-    }
-  }
-  return map;
-}
-
 export function loadConfig(): BotConfig {
   const server = process.env.IRC_SERVER;
   const channelMeetingMapRaw = process.env.CHANNEL_MEETING_MAP;
@@ -51,7 +37,7 @@ export function loadConfig(): BotConfig {
     throw new Error('IRC_SERVER is required');
   }
   if (!channelMeetingMapRaw) {
-    throw new Error('CHANNEL_MEETING_MAP is required (e.g. "#did:5637387869,#wpwg:86873854269")');
+    throw new Error('CHANNEL_MEETING_MAP is required (e.g. "#did:5637387869:zoomUserIdA,#wpwg:86873854269:zoomUserIdB")');
   }
 
   const channelMeetingMap = parseChannelMeetingMap(channelMeetingMapRaw);

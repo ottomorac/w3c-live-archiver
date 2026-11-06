@@ -5,3 +5,4 @@
 export * from './types';
 export * from './events';
 export * from './redis-client';
+export * from './channel-meeting-map';

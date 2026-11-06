@@ -43,10 +43,18 @@ export interface MeetingSession {
   state: TranscriptionState;
 }
 
+export interface ChannelMeeting {
+  meetingId: string;
+  // Zoom user whose OAuth token is used to start RTMS for this meeting
+  zoomUserId?: string;
+}
+
+export type ChannelMeetingMap = Record<string, ChannelMeeting>;
+
 export interface IRCConfig {
   server: string;
   port: number;
-  channelMeetingMap: Record<string, string>;
+  channelMeetingMap: ChannelMeetingMap;
   nick: string;
   username: string;
   realname: string;
