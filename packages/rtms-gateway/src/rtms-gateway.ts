@@ -18,6 +18,11 @@ import { SessionManager } from './session-manager';
 import { RTMSSession } from './rtms-session';
 import type { RTMSGatewayConfig } from './config';
 
+interface UserTokens {
+  accessToken: string;
+  refreshToken: string;
+}
+
 export class RTMSGateway {
   private app = express();
   private sessionManager: SessionManager;
@@ -26,8 +31,7 @@ export class RTMSGateway {
   private static readonly MAX_RTMS_START_ATTEMPTS = 3;
 
   private currentIrcChannel: string | null = null;
-  private userAccessToken: string | null = null;
-  private refreshToken: string | null = null;
+  private userTokens = new Map<string, UserTokens>(); // Zoom user ID → OAuth tokens
 
   constructor(
     private config: RTMSGatewayConfig,
@@ -46,6 +50,7 @@ export class RTMSGateway {
   async start(): Promise<void> {
     console.log('[RTMSGateway] Starting...');
     this.loadTokens();
+    this.warnAboutUnauthorizedChannels();
     await this.sessionManager.createSession();
 
     const { port, path } = this.config.webhook;
@@ -106,11 +111,15 @@ export class RTMSGateway {
 
         if (response.ok) {
           const data: any = await response.json();
-          this.userAccessToken = data.access_token;
-          this.refreshToken = data.refresh_token;
+          const userId = await this.fetchZoomUserId(data.access_token);
+          if (!userId) {
+            res.status(500).send('Authorized, but the Zoom user ID could not be read. Confirm the app has the user:read:user scope, then visit /oauth/install again.');
+            return;
+          }
+          this.userTokens.set(userId, { accessToken: data.access_token, refreshToken: data.refresh_token });
           this.saveTokens();
-          console.log('[RTMSGateway] OAuth token exchange successful — app installed, access token stored');
-          res.send('<html><body><h2>App installed successfully. You may close this tab.</h2></body></html>');
+          console.log(`[RTMSGateway] OAuth token exchange successful — app installed, access token stored for user ${userId}`);
+          res.send(`<html><body><h2>App installed successfully. Please note your Zoom User ID is ${userId}. This will be required for the transcriber configuration.</h2></body></html>`);
         } else {
           const err = await response.text();
           console.error('[RTMSGateway] OAuth token exchange failed:', err);
@@ -203,10 +212,10 @@ export class RTMSGateway {
     );
   }
 
-  private async callStartRTMS(meetingId: string, ircChannel: string): Promise<void> {
-    if (!this.userAccessToken) {
-      console.error('[RTMSGateway] startRTMS: no OAuth access token — visit /oauth/install first');
-      await this.notifyIRC(ircChannel, 'Unable to start transcription — not authorized. Please ask an admin to visit /oauth/install.');
+  private async callStartRTMS(meetingId: string, userId: string, ircChannel: string): Promise<void> {
+    if (!this.userTokens.has(userId)) {
+      console.error(`[RTMSGateway] startRTMS: no OAuth access token for user ${userId} — visit /oauth/install first`);
+      await this.notifyIRC(ircChannel, 'Unable to start transcription — not authorized. Please ask the Zoom meeting owner to visit /oauth/install.');
       return;
     }
 
@@ -225,7 +234,7 @@ export class RTMSGateway {
         response = await fetch(url, {
           method: 'PATCH',
           headers: {
-            Authorization: `Bearer ${this.userAccessToken}`,
+            Authorization: `Bearer ${this.userTokens.get(userId)!.accessToken}`,
             'Content-Type': 'application/json',
           },
           body,
@@ -249,10 +258,10 @@ export class RTMSGateway {
       if (response.status === 401 && attempt < RTMSGateway.MAX_RTMS_START_ATTEMPTS) {
         console.warn('[RTMSGateway] startRTMS → 401 Unauthorized, access token likely expired — attempting refresh');
         await this.notifyIRC(ircChannel, 'Access token expired — refreshing authorization, please wait...');
-        const refreshed = await this.refreshAccessToken();
+        const refreshed = await this.refreshAccessToken(userId);
         if (!refreshed) {
           console.error('[RTMSGateway] startRTMS → token refresh failed, aborting');
-          await this.notifyIRC(ircChannel, 'Unable to refresh authorization — please ask an admin to visit /oauth/install.');
+          await this.notifyIRC(ircChannel, 'Unable to refresh authorization — please ask the Zoom meeting owner to visit /oauth/install.');
           return;
         }
         continue;
@@ -271,16 +280,31 @@ export class RTMSGateway {
   }
 
   // ---------------------------------------------------------------------------
-  // OAuth token refresh
+  // OAuth user lookup and token refresh
   // ---------------------------------------------------------------------------
 
-  private async refreshAccessToken(): Promise<boolean> {
-    if (!this.refreshToken) {
-      console.error('[RTMSGateway] refreshAccessToken: no refresh token available — visit /oauth/install to re-authorize');
+  private async fetchZoomUserId(accessToken: string): Promise<string | null> {
+    const response = await fetch('https://api.zoom.us/v2/users/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      console.error(`[RTMSGateway] fetchZoomUserId → HTTP ${response.status}: ${await response.text()}`);
+      return null;
+    }
+
+    const user: any = await response.json();
+    return user.id ?? null;
+  }
+
+  private async refreshAccessToken(userId: string): Promise<boolean> {
+    const tokens = this.userTokens.get(userId);
+    if (!tokens) {
+      console.error(`[RTMSGateway] refreshAccessToken: no refresh token for user ${userId} — visit /oauth/install to re-authorize`);
       return false;
     }
 
-    console.log('[RTMSGateway] Refreshing OAuth access token...');
+    console.log(`[RTMSGateway] Refreshing OAuth access token for user ${userId}...`);
     const { clientId, clientSecret } = this.config.zoom;
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
@@ -294,7 +318,7 @@ export class RTMSGateway {
         },
         body: new URLSearchParams({
           grant_type: 'refresh_token',
-          refresh_token: this.refreshToken,
+          refresh_token: tokens.refreshToken,
         }),
       });
     } catch (err) {
@@ -311,10 +335,9 @@ export class RTMSGateway {
     }
 
     const data: any = JSON.parse(responseText);
-    this.userAccessToken = data.access_token;
-    this.refreshToken = data.refresh_token;
+    this.userTokens.set(userId, { accessToken: data.access_token, refreshToken: data.refresh_token });
     this.saveTokens();
-    console.log('[RTMSGateway] refreshAccessToken → success, access token updated');
+    console.log(`[RTMSGateway] refreshAccessToken → success, access token updated for user ${userId}`);
     return true;
   }
 
@@ -375,8 +398,8 @@ export class RTMSGateway {
   // Reverse lookup: meeting ID string → IRC channel name
   private lookupChannelByMeetingId(meetingId: string): string | null {
     if (!meetingId) return null;
-    for (const [channel, id] of Object.entries(this.config.channelMeetingMap)) {
-      if (id === meetingId) return channel;
+    for (const [channel, meeting] of Object.entries(this.config.channelMeetingMap)) {
+      if (meeting.meetingId === meetingId) return channel;
     }
     return null;
   }
@@ -409,11 +432,28 @@ export class RTMSGateway {
     try {
       const raw = readFileSync(this.config.tokenStoragePath, 'utf8');
       const data = JSON.parse(raw);
-      if (data.accessToken) this.userAccessToken = data.accessToken;
-      if (data.refreshToken) this.refreshToken = data.refreshToken;
-      console.log(`[RTMSGateway] Loaded OAuth tokens from ${this.config.tokenStoragePath}`);
+      if (typeof data.accessToken === 'string') {
+        console.warn('[RTMSGateway] Token file uses the old single-user format and was ignored — each user must visit /oauth/install again');
+        return;
+      }
+      for (const [userId, tokens] of Object.entries<any>(data)) {
+        if (tokens?.accessToken && tokens?.refreshToken) {
+          this.userTokens.set(userId, { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+        }
+      }
+      console.log(`[RTMSGateway] Loaded OAuth tokens for ${this.userTokens.size} user(s) from ${this.config.tokenStoragePath}`);
     } catch {
       console.log(`[RTMSGateway] No token file found at ${this.config.tokenStoragePath} — visit /oauth/install to authorize`);
+    }
+  }
+
+  private warnAboutUnauthorizedChannels(): void {
+    for (const [channel, { zoomUserId }] of Object.entries(this.config.channelMeetingMap)) {
+      if (!zoomUserId) {
+        console.warn(`[RTMSGateway] ${channel} has no Zoom user ID in CHANNEL_MEETING_MAP — connect will fail until one is added`);
+      } else if (!this.userTokens.has(zoomUserId)) {
+        console.warn(`[RTMSGateway] ${channel}: no tokens stored for Zoom user ${zoomUserId} — that user must visit /oauth/install`);
+      }
     }
   }
 
@@ -421,7 +461,7 @@ export class RTMSGateway {
     try {
       writeFileSync(
         this.config.tokenStoragePath,
-        JSON.stringify({ accessToken: this.userAccessToken, refreshToken: this.refreshToken }, null, 2),
+        JSON.stringify(Object.fromEntries(this.userTokens), null, 2),
         'utf8',
       );
       console.log(`[RTMSGateway] OAuth tokens saved to ${this.config.tokenStoragePath}`);
@@ -462,14 +502,20 @@ export class RTMSGateway {
         return;
       }
 
-      const meetingId = this.config.channelMeetingMap[channel];
-      if (!meetingId) {
+      const meeting = this.config.channelMeetingMap[channel];
+      if (!meeting) {
         console.error(`[RTMSGateway] CONNECT: no meeting ID configured for channel ${channel}`);
         return;
       }
 
-      console.log(`[RTMSGateway] CONNECT from ${channel} (by ${cmd.triggeredBy}) — starting RTMS for meeting ${meetingId}`);
-      await this.callStartRTMS(meetingId, channel);
+      if (!meeting.zoomUserId) {
+        console.error(`[RTMSGateway] CONNECT: no Zoom user ID configured for channel ${channel}`);
+        await this.notifyIRC(channel, 'Unable to start transcription — no Zoom user ID is configured for this channel. Please contact W3C staff.');
+        return;
+      }
+
+      console.log(`[RTMSGateway] CONNECT from ${channel} (by ${cmd.triggeredBy}) — starting RTMS for meeting ${meeting.meetingId} as user ${meeting.zoomUserId}`);
+      await this.callStartRTMS(meeting.meetingId, meeting.zoomUserId, channel);
     });
 
     this.sessionManager.onCommand(CommandType.PAUSE, async (cmd: Command) => {

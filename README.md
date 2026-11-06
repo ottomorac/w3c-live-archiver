@@ -96,6 +96,7 @@ ottomorac: transcriber-bot, please excuse us
 5. Under **Scopes**, add:
    - `meeting:update:participant_rtms_app_status`
    - `meeting:update:participant_rtms_app_status:admin`
+   - `user:read:user`
 6. Under **Features → Surface**, enable **Real-time Media Streams (RTMS)** and **disable** the auto-start option (the bot starts RTMS manually via IRC command)
 7. Under **Features → Event Subscriptions**, add a new subscription:
    - **Event notification endpoint URL**: `https://your-ngrok-url.ngrok-free.app/webhook`
@@ -125,8 +126,8 @@ Edit `.env` with your values:
 # IRC
 IRC_SERVER=irc.w3.org
 IRC_PORT=6667
-# Map IRC channels to their Zoom meeting IDs (comma-separated channel:meetingId pairs)
-CHANNEL_MEETING_MAP="#did:5637387869,#wpwg:86873854269"
+# Map IRC channels to their Zoom meeting and its owner (comma-separated channel:meetingId:zoomUserId entries)
+CHANNEL_MEETING_MAP="#did:5637387869:zoomUserIdA,#wpwg:86873854269:zoomUserIdB"
 IRC_BOT_NICK=transcriber-bot
 
 # Redis
@@ -148,7 +149,7 @@ WEBHOOK_PORT=3000
 WEBHOOK_PATH=/webhook
 ```
 
-`CHANNEL_MEETING_MAP` is the authorised list of IRC channels and their corresponding Zoom meeting IDs. The bot will only join channels on this list and will only start RTMS for the mapped meeting.
+`CHANNEL_MEETING_MAP` is the authorised list of IRC channels, their Zoom meeting IDs and the Zoom user ID whose OAuth token starts RTMS for that meeting. The bot will only join channels on this list and will only start RTMS for the mapped meeting. Zoom user IDs come from step 8, so leave them out on the first run (`#did:5637387869`) and add them once each user has installed the app; `connect` fails for a channel until its ID is set.
 
 ### 5. Start Redis
 
@@ -186,9 +187,9 @@ Open in your browser:
 https://your-ngrok-url.ngrok-free.app/oauth/install
 ```
 
-This redirects you to Zoom's OAuth authorization page. Approve the app. You should see "App installed successfully" and the terminal will log `OAuth token exchange successful — app installed, access token stored`.
+This redirects you to Zoom's OAuth authorization page. Approve the app. You should see "App installed successfully" with your Zoom User ID, and the terminal will log `OAuth token exchange successful — app installed, access token stored for user <id>`.
 
-You only need to do this once. Tokens are saved to `.zoom-tokens.json` (or the path set by `TOKEN_STORAGE_PATH`) and reloaded automatically on every subsequent gateway restart.
+Each Zoom user whose meetings the bot will transcribe must do this once. Add their Zoom User ID to the matching `CHANNEL_MEETING_MAP` entries, then restart the gateway and bot. Tokens are saved per user to `.zoom-tokens.json` (or the path set by `TOKEN_STORAGE_PATH`) and reloaded automatically on every subsequent gateway restart.
 
 ### 9. Invite the bot to an IRC channel
 
@@ -237,7 +238,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `CHANNEL_MEETING_MAP` | Yes | Comma-separated `#channel:meetingId` pairs of authorised channels (e.g. `"#did:5637387869,#wpwg:86873854269"`) |
+| `CHANNEL_MEETING_MAP` | Yes | Comma-separated `#channel:meetingId:zoomUserId` entries for authorised channels (e.g. `"#did:5637387869:zoomUserIdA,#wpwg:86873854269:zoomUserIdB"`) |
 | `ZOOM_CLIENT_ID` | Yes | OAuth Client ID from Zoom Marketplace |
 | `ZOOM_CLIENT_SECRET` | Yes | OAuth Client Secret from Zoom Marketplace |
 | `ZOOM_SECRET_TOKEN` | Yes | Secret Token from Event Subscriptions section (not the Client Secret) |
@@ -260,7 +261,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 
 **`transcriber-bot, connect` has no effect**
 - Confirm a Zoom meeting is currently in progress for the mapped meeting ID
-- Confirm the gateway has a valid OAuth token (visit `/oauth/install` if the gateway was restarted)
+- Confirm the channel's `CHANNEL_MEETING_MAP` entry has a Zoom user ID, and that user has a valid OAuth token (they can visit `/oauth/install` to re-authorize)
 - Check the gateway logs for "CONNECT" and "startRTMS" lines to see the API response
 
 **No `meeting.rtms_started` webhook after a successful `connect`**
@@ -286,7 +287,7 @@ All commands use the format `transcriber-bot, <command>` (the bot's IRC nick fol
 - Consider a paid ngrok account for a stable domain
 
 **OAuth token lost after gateway restart**
-- Tokens are persisted to the file set by `TOKEN_STORAGE_PATH` (default: `.zoom-tokens.json` in the project root) and reloaded automatically on startup. If the file is missing or corrupted, visit `/oauth/install` to re-authorize and generate a new token file.
+- Tokens are persisted to the file set by `TOKEN_STORAGE_PATH` (default: `.zoom-tokens.json` in the project root) and reloaded automatically on startup. If the file is missing, corrupted or in the old single-user format, each user must visit `/oauth/install` to re-authorize.
 
 ## Project Status
 

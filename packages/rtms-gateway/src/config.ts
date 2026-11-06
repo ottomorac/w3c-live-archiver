@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
-import type { RedisConfig } from '@transcriber/shared';
+import { parseChannelMeetingMap, type ChannelMeetingMap, type RedisConfig } from '@transcriber/shared';
 
 const envPaths = [
   join(process.cwd(), '.env'),
@@ -32,22 +32,8 @@ export interface RTMSGatewayConfig {
     path: string;
   };
   redis: RedisConfig;
-  channelMeetingMap: Record<string, string>;
+  channelMeetingMap: ChannelMeetingMap;
   tokenStoragePath: string;
-}
-
-function parseChannelMeetingMap(raw: string): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const entry of raw.split(',')) {
-    const trimmed = entry.trim();
-    const colonIdx = trimmed.lastIndexOf(':');
-    if (colonIdx > 0) {
-      const channel = trimmed.slice(0, colonIdx).trim();
-      const meetingId = trimmed.slice(colonIdx + 1).trim();
-      if (channel && meetingId) map[channel] = meetingId;
-    }
-  }
-  return map;
 }
 
 export function loadConfig(): RTMSGatewayConfig {
@@ -60,7 +46,7 @@ export function loadConfig(): RTMSGatewayConfig {
     throw new Error('ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, and ZOOM_SECRET_TOKEN are required');
   }
   if (!channelMeetingMapRaw) {
-    throw new Error('CHANNEL_MEETING_MAP is required (e.g. "#did:5637387869,#wpwg:86873854269")');
+    throw new Error('CHANNEL_MEETING_MAP is required (e.g. "#did:5637387869:zoomUserIdA,#wpwg:86873854269:zoomUserIdB")');
   }
 
   const channelMeetingMap = parseChannelMeetingMap(channelMeetingMapRaw);
